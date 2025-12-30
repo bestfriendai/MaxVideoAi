@@ -66,6 +66,59 @@ export {
   useDeepMemo,
 } from './Memoized';
 
+// Navigation
+export { Drawer, MobileNavDrawer, BottomSheet } from './Drawer';
+export {
+  BottomNav,
+  FloatingActionButton,
+  MobileHeader,
+  TabBar,
+} from './BottomNav';
+export {
+  Breadcrumb,
+  PageHeader,
+  SectionHeader,
+  type BreadcrumbItem,
+} from './Breadcrumb';
+
+// Command Palette
+export {
+  CommandPaletteProvider,
+  useCommandPalette,
+  KeyboardShortcutsModal,
+  type CommandItem,
+  type CommandGroup,
+} from './CommandPalette';
+
+// Data Table
+export {
+  DataTable,
+  StatusCell,
+  RowActions,
+  RowActionItem,
+  type Column,
+  type SortState,
+  type SortDirection,
+  type FilterState,
+  type PaginationState,
+} from './DataTable';
+
+// Page Transitions & Loading
+export {
+  PageTransition,
+  StaggeredList,
+  LoadingBarProvider,
+  useLoadingBar,
+  PageLoader,
+  Spinner,
+  SuspenseFallback,
+  Reveal,
+  FadeInWhenVisible,
+  Pulse,
+  SkeletonPage,
+  SkeletonDashboard,
+} from './PageTransition';
+
 // Existing components
 export { default as EngineIcon } from './EngineIcon';
 export { default as UIIcon } from './UIIcon';
