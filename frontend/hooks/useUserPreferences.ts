@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from 'swr';
+import { authFetch } from '@/lib/authFetch';
 
 export type UserPreferencesResponse = {
   defaultSharePublic: boolean;
@@ -9,7 +10,7 @@ export type UserPreferencesResponse = {
 };
 
 async function fetchPreferences(): Promise<UserPreferencesResponse | null> {
-  const res = await fetch('/api/user/preferences', { credentials: 'include' });
+  const res = await authFetch('/api/user/preferences');
   if (!res.ok) {
     if (res.status === 401) {
       return null;

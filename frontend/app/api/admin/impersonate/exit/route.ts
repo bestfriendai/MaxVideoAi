@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSupabaseRouteClient } from '@/lib/supabase-ssr';
 import {
   decodeImpersonationSessionCookie,
   decodeImpersonationTargetCookie,
@@ -18,17 +17,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'No active impersonation session' }, { status: 400 });
   }
 
-  const supabase = createSupabaseRouteClient();
-  const { error: restoreError } = await supabase.auth.setSession({
-    access_token: sessionPayload.accessToken,
-    refresh_token: sessionPayload.refreshToken,
-  });
-  if (restoreError) {
-    return NextResponse.json(
-      { ok: false, error: restoreError.message ?? 'Failed to restore admin session' },
-      { status: 500 }
-    );
-  }
+  // Firebase Auth: Session restoration is handled client-side
+  // We just clear the impersonation cookies and redirect
+  // The client-side Firebase auth will maintain the admin's actual session
 
   const redirectParam = req.nextUrl.searchParams.get('redirect');
   const redirectTo =

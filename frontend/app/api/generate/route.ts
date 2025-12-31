@@ -34,7 +34,8 @@ import type { Currency } from '@/lib/currency';
 import { convertCents } from '@/lib/exchange';
 import { applyEngineVariantPricing, buildAudioAddonInput } from '@/lib/pricing-addons';
 import { recordGenerateMetric } from '@/server/generate-metrics';
-import { createSupabaseRouteClient } from '@/lib/supabase-ssr';
+import { getRouteAuthContext } from '@/lib/supabase-ssr';
+import { fetchFromFirebase } from '@/lib/firebase-backend';
 
 const DISPLAY_CURRENCY = 'USD';
 const DISPLAY_CURRENCY_LOWER = 'usd';
@@ -87,15 +88,10 @@ function isVideoMode(value: unknown): value is VideoMode {
   return value === 't2v' || value === 'i2v';
 }
 
-async function resolveUserId(): Promise<string | null> {
+async function resolveUserId(req: NextRequest): Promise<string | null> {
   try {
-    const supabase = createSupabaseRouteClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user?.id) {
-      return user.id;
-    }
+    const { userId } = await getRouteAuthContext(req);
+    return userId;
   } catch {
     // swallow helper errors
   }
@@ -390,6 +386,31 @@ async function markJobAwaitingFal(params: {
 
 export async function POST(req: NextRequest) {
   const requestStartedAt = Date.now();
+  const body = await req
+    .json()
+    .catch((error) => {
+      console.error('[api/generate] invalid JSON', error);
+      return null;
+    });
+  if (!body) return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 });
+
+  if (ENV.NEXT_PUBLIC_FIREBASE_FUNCTIONS_URL) {
+    try {
+      // Map frontend fields to what Firebase function expects
+      const firebaseBody = {
+        ...body,
+        engine: body.engineId || body.engine,
+      };
+      const res = await fetchFromFirebase('generate', {
+        method: 'POST',
+        body: JSON.stringify(firebaseBody),
+      });
+      return NextResponse.json(res, { status: res.ok ? 200 : 400 });
+    } catch (error) {
+      console.warn('Failed to call generate in Firebase, falling back to local:', error);
+    }
+  }
+
   const metricState: {
     engineId: string | null;
     engineLabel: string | null;
@@ -431,13 +452,6 @@ export async function POST(req: NextRequest) {
     });
   };
 
-  const body = await req
-    .json()
-    .catch((error) => {
-      console.error('[api/generate] invalid JSON', error);
-      return null;
-    });
-  if (!body) return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 });
 
   const engine = await getConfiguredEngine(String(body.engineId || ''));
   if (!engine) return NextResponse.json({ ok: false, error: 'Unknown engine' }, { status: 400 });
@@ -649,7 +663,7 @@ export async function POST(req: NextRequest) {
       ? { mode: body.payment.mode, paymentIntentId: body.payment.paymentIntentId }
       : {};
   const explicitUserId = typeof body.userId === 'string' && body.userId.trim().length ? body.userId.trim() : null;
-  const authenticatedUserId = await resolveUserId();
+  const authenticatedUserId = await resolveUserId(req);
   const userId = explicitUserId ?? authenticatedUserId ?? null;
   if (userId) {
     metricState.userId = userId;
@@ -796,40 +810,40 @@ export async function POST(req: NextRequest) {
         : undefined;
   const indexable = requestedIndexable ?? defaultAllowIndex;
 
-type PendingReceipt = {
-  userId: string;
-  amountCents: number;
-  currency: string;
-  description: string;
-  jobId: string;
-  snapshot: unknown;
-  applicationFeeCents: number | null;
-  vendorAccountId: string | null;
-  stripePaymentIntentId?: string | null;
-  stripeChargeId?: string | null;
-};
+  type PendingReceipt = {
+    userId: string;
+    amountCents: number;
+    currency: string;
+    description: string;
+    jobId: string;
+    snapshot: unknown;
+    applicationFeeCents: number | null;
+    vendorAccountId: string | null;
+    stripePaymentIntentId?: string | null;
+    stripeChargeId?: string | null;
+  };
 
-async function recordRefundReceipt(
-  receipt: PendingReceipt,
-  description: string,
-  stripeRefundId: string | null
-): Promise<void> {
-  const priceOnly = receiptsPriceOnlyEnabled();
-  if (!receipt.jobId) return;
-  try {
-    const existing = await query<{ id: string }>(
-      `SELECT id FROM app_receipts WHERE job_id = $1 AND type = 'refund' LIMIT 1`,
-      [receipt.jobId]
-    );
-    if (existing.length) return;
-  } catch (error) {
-    console.warn('[receipts] failed to check existing refund', error);
-    return;
-  }
+  async function recordRefundReceipt(
+    receipt: PendingReceipt,
+    description: string,
+    stripeRefundId: string | null
+  ): Promise<void> {
+    const priceOnly = receiptsPriceOnlyEnabled();
+    if (!receipt.jobId) return;
+    try {
+      const existing = await query<{ id: string }>(
+        `SELECT id FROM app_receipts WHERE job_id = $1 AND type = 'refund' LIMIT 1`,
+        [receipt.jobId]
+      );
+      if (existing.length) return;
+    } catch (error) {
+      console.warn('[receipts] failed to check existing refund', error);
+      return;
+    }
 
-  try {
-    await query(
-      `INSERT INTO app_receipts (
+    try {
+      await query(
+        `INSERT INTO app_receipts (
          user_id,
          type,
          amount_cents,
@@ -848,69 +862,69 @@ async function recordRefundReceipt(
        VALUES (
          $1,'refund',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13
        )`,
-      [
-        receipt.userId,
-        receipt.amountCents,
-        receipt.currency,
-        description,
-        receipt.jobId,
-        JSON.stringify(receipt.snapshot),
-        priceOnly ? null : 0,
-        priceOnly ? null : receipt.vendorAccountId,
-        receipt.stripePaymentIntentId ?? null,
-        receipt.stripeChargeId ?? null,
-        stripeRefundId ?? null,
-        priceOnly ? null : 0,
-        priceOnly ? null : receipt.vendorAccountId,
-      ]
-    );
-  } catch (error) {
-    console.warn('[receipts] failed to record refund', error);
-  }
-}
-
-async function issueStripeRefund(receipt: PendingReceipt): Promise<string | null> {
-  const refundReference = receipt.stripePaymentIntentId ?? receipt.stripeChargeId;
-  if (!refundReference) return null;
-  if (!ENV.STRIPE_SECRET_KEY) {
-    console.warn('[stripe] unable to refund: STRIPE_SECRET_KEY missing');
-    return null;
-  }
-  try {
-    const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-    const params = receipt.stripePaymentIntentId
-      ? { payment_intent: receipt.stripePaymentIntentId }
-      : { charge: receipt.stripeChargeId! };
-    const idempotencyKey = receipt.jobId ? `job-refund-${receipt.jobId}` : undefined;
-    const refund = await stripe.refunds.create(
-      params,
-      idempotencyKey ? { idempotencyKey } : undefined
-    );
-    return refund?.id ?? null;
-  } catch (error) {
-    console.warn('[stripe] refund failed', error);
-    return null;
-  }
-}
-
-async function rollbackPendingPayment(params: {
-  pendingReceipt: PendingReceipt | null;
-  walletChargeReserved: boolean;
-  refundDescription: string;
-}): Promise<void> {
-  const { pendingReceipt, walletChargeReserved, refundDescription } = params;
-  if (!pendingReceipt) return;
-  try {
-    if (walletChargeReserved) {
-      await recordRefundReceipt(pendingReceipt, refundDescription, null);
-      return;
+        [
+          receipt.userId,
+          receipt.amountCents,
+          receipt.currency,
+          description,
+          receipt.jobId,
+          JSON.stringify(receipt.snapshot),
+          priceOnly ? null : 0,
+          priceOnly ? null : receipt.vendorAccountId,
+          receipt.stripePaymentIntentId ?? null,
+          receipt.stripeChargeId ?? null,
+          stripeRefundId ?? null,
+          priceOnly ? null : 0,
+          priceOnly ? null : receipt.vendorAccountId,
+        ]
+      );
+    } catch (error) {
+      console.warn('[receipts] failed to record refund', error);
     }
-    const refundId = await issueStripeRefund(pendingReceipt);
-    await recordRefundReceipt(pendingReceipt, refundDescription, refundId);
-  } catch (error) {
-    console.warn('[payments] failed to rollback pending payment', error);
   }
-}
+
+  async function issueStripeRefund(receipt: PendingReceipt): Promise<string | null> {
+    const refundReference = receipt.stripePaymentIntentId ?? receipt.stripeChargeId;
+    if (!refundReference) return null;
+    if (!ENV.STRIPE_SECRET_KEY) {
+      console.warn('[stripe] unable to refund: STRIPE_SECRET_KEY missing');
+      return null;
+    }
+    try {
+      const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+      const params = receipt.stripePaymentIntentId
+        ? { payment_intent: receipt.stripePaymentIntentId }
+        : { charge: receipt.stripeChargeId! };
+      const idempotencyKey = receipt.jobId ? `job-refund-${receipt.jobId}` : undefined;
+      const refund = await stripe.refunds.create(
+        params,
+        idempotencyKey ? { idempotencyKey } : undefined
+      );
+      return refund?.id ?? null;
+    } catch (error) {
+      console.warn('[stripe] refund failed', error);
+      return null;
+    }
+  }
+
+  async function rollbackPendingPayment(params: {
+    pendingReceipt: PendingReceipt | null;
+    walletChargeReserved: boolean;
+    refundDescription: string;
+  }): Promise<void> {
+    const { pendingReceipt, walletChargeReserved, refundDescription } = params;
+    if (!pendingReceipt) return;
+    try {
+      if (walletChargeReserved) {
+        await recordRefundReceipt(pendingReceipt, refundDescription, null);
+        return;
+      }
+      const refundId = await issueStripeRefund(pendingReceipt);
+      await recordRefundReceipt(pendingReceipt, refundDescription, refundId);
+    } catch (error) {
+      console.warn('[payments] failed to rollback pending payment', error);
+    }
+  }
 
   let pendingReceipt: PendingReceipt | null = null;
   let paymentStatus: string = 'platform';
@@ -1309,8 +1323,8 @@ async function rollbackPendingPayment(params: {
       applicationFeeCents: priceOnlyReceipts
         ? null
         : connectMode
-            ? Number(intent.metadata?.platform_fee_cents_usd ?? applicationFeeCents)
-            : null,
+          ? Number(intent.metadata?.platform_fee_cents_usd ?? applicationFeeCents)
+          : null,
       vendorAccountId,
       stripePaymentIntentId,
       stripeChargeId,
@@ -1336,24 +1350,24 @@ async function rollbackPendingPayment(params: {
       : null;
   const normalizedReferenceImages = Array.isArray(referenceImagesInput)
     ? referenceImagesInput
-        .map((value: unknown) => (typeof value === 'string' ? value.trim() : ''))
-        .filter((value): value is string => value.length > 0)
+      .map((value: unknown) => (typeof value === 'string' ? value.trim() : ''))
+      .filter((value): value is string => value.length > 0)
     : undefined;
 
   const falInputs =
     processedAttachments.length > 0
       ? processedAttachments.map((attachment) => ({
-          name: attachment.name,
-          type: attachment.type,
-          size: attachment.size,
-          kind: attachment.kind,
-          slotId: attachment.slotId,
-          label: attachment.label,
-          url: attachment.url,
-          width: attachment.width ?? undefined,
-          height: attachment.height ?? undefined,
-          assetId: attachment.assetId,
-        }))
+        name: attachment.name,
+        type: attachment.type,
+        size: attachment.size,
+        kind: attachment.kind,
+        slotId: attachment.slotId,
+        label: attachment.label,
+        url: attachment.url,
+        width: attachment.width ?? undefined,
+        height: attachment.height ?? undefined,
+        assetId: attachment.assetId,
+      }))
       : undefined;
   const falInputSummary = {
     primaryImageUrl: initialImageUrl ?? null,
@@ -1485,7 +1499,7 @@ async function rollbackPendingPayment(params: {
   let jobInserted = false;
   try {
     await query(
-        `INSERT INTO app_jobs (
+      `INSERT INTO app_jobs (
          job_id,
          user_id,
          engine_id,
@@ -1659,7 +1673,7 @@ async function rollbackPendingPayment(params: {
         : typeof (error as { providerJobId?: string } | undefined)?.providerJobId === 'string'
           ? (error as { providerJobId?: string }).providerJobId!
           : lastProviderJobId ?? batchId ?? null;
-  const paymentStatusOverride =
+    const paymentStatusOverride =
       pendingReceipt && paymentMode === 'wallet'
         ? 'refunded_wallet'
         : pendingReceipt && paymentMode !== 'wallet'
@@ -1898,9 +1912,9 @@ async function rollbackPendingPayment(params: {
 
   let thumb =
     normalizeMediaUrl(generationResult.thumbUrl) ??
-      (typeof generationResult.thumbUrl === 'string' && generationResult.thumbUrl.trim().length
-        ? generationResult.thumbUrl
-        : null) ??
+    (typeof generationResult.thumbUrl === 'string' && generationResult.thumbUrl.trim().length
+      ? generationResult.thumbUrl
+      : null) ??
     placeholderThumb;
   let previewFrame = thumb;
   const video = normalizeMediaUrl(generationResult.videoUrl) ?? generationResult.videoUrl ?? null;

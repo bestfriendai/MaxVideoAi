@@ -20,6 +20,8 @@ import {
   LUMA_RAY2_ERROR_UNSUPPORTED,
 } from '@/lib/luma-ray2';
 import { applyEngineVariantPricing, buildAudioAddonInput } from '@/lib/pricing-addons';
+import { fetchFromFirebase } from '@/lib/firebase-backend';
+import { ENV } from '@/lib/env';
 
 function applyPricingDetails(engine: EngineCaps, pricing: EnginePricingDetails | null): void {
   if (!pricing) return;
@@ -160,6 +162,16 @@ export async function getConfiguredEnginesByCategory(
   category: EngineCategory = 'video',
   includeDisabled = false
 ): Promise<EngineCaps[]> {
+  if (ENV.NEXT_PUBLIC_FIREBASE_FUNCTIONS_URL) {
+    try {
+      const data = await fetchFromFirebase('engines');
+      const engines = data.engines || [];
+      if (category === 'all') return engines;
+      return engines.filter((e: EngineCaps & { category?: string }) => (e.category || 'video') === category);
+    } catch (error) {
+      console.warn('Failed to fetch engines from Firebase, falling back to local:', error);
+    }
+  }
   const baseEngines = getBaseEnginesByCategory(category);
   return getConfiguredEnginesForBase(baseEngines, includeDisabled);
 }

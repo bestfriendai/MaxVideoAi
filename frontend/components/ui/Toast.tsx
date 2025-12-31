@@ -160,7 +160,12 @@ export function ToastContainer() {
 
   useEffect(() => {
     setMounted(true);
-    return toastStore.subscribe(setToasts);
+    const unsubscribe = toastStore.subscribe(setToasts);
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, []);
 
   if (!mounted) return null;

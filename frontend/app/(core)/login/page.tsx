@@ -1,9 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AuthApiError } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  sendPasswordResetEmail,
+  onAuthStateChanged,
+  User,
+  AuthError
+} from 'firebase/auth';
+import { auth } from '@/lib/firebase-client';
 import { LOGIN_NEXT_STORAGE_KEY, LOGIN_LAST_TARGET_KEY, LOGIN_SKIP_ONBOARDING_KEY } from '@/lib/auth-storage';
 import clsx from 'clsx';
 import enMessages from '@/messages/en.json';
@@ -140,7 +149,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [status, setStatus] = useState<string | null>(null);
-  const [statusTone, setStatusTone] = useState<'info' | 'success'>('info');
+  const [statusTone, setStatusTone] = useState<'info' | 'success' | 'error'>('info');
   const [error, setError] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement | null>(null);
   const passwordRef = useRef<HTMLInputElement | null>(null);
@@ -151,11 +160,6 @@ export default function LoginPage() {
   const [browserLocale, setBrowserLocale] = useState<string | null>(null);
   const [signupSuggestion, setSignupSuggestion] = useState<{ email: string; password: string } | null>(null);
   const safeNextPath = useMemo(() => sanitizeNextPath(nextPath), [nextPath]);
-  const redirectTo = useMemo(() => {
-    if (!siteUrl) return undefined;
-    const base = siteUrl.endsWith('/') ? siteUrl.slice(0, -1) : siteUrl;
-    return `${base}/auth/callback?next=${encodeURIComponent(safeNextPath)}`;
-  }, [safeNextPath, siteUrl]);
 
   const syncInputState = useCallback(() => {
     const nextEmail = emailRef.current?.value ?? '';
@@ -261,52 +265,6 @@ export default function LoginPage() {
     }
   }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const hash = window.location.hash;
-    if (!hash || !hash.includes('access_token=')) {
-      return;
-    }
-    const params = new URLSearchParams(hash.replace(/^#/, ''));
-    const accessToken = params.get('access_token');
-    const refreshToken =
-      params.get('refresh_token') ?? params.get('refreshToken') ?? params.get('refresh-token');
-    if (!accessToken || !refreshToken) {
-      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-      return;
-    }
-    let cancelled = false;
-    setStatusTone('info');
-    setStatus('Completing sign-in…');
-    setError(null);
-    void supabase.auth
-      .setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      })
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          setError(error.message ?? 'Unable to complete sign-in.');
-          setStatus(null);
-          return;
-        }
-        if (data.session) {
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Unable to complete sign-in.');
-        setStatus(null);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (mode !== 'signin' && signupSuggestion) {
@@ -318,38 +276,19 @@ export default function LoginPage() {
     if (!nextPathReady) return;
     let cancelled = false;
 
-    async function redirectIfAuthenticated() {
-      const { data } = await supabase.auth.getUser();
+    // Use Firebase Auth Listener
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (cancelled) return;
-      const user = data.user ?? null;
       if (user && nextPath) {
         const safeTarget = sanitizeNextPath(nextPath);
         persistNextTarget(safeTarget);
         router.replace(safeTarget);
-      } else if (!user) {
-        // stay on page
       }
-    }
-
-    void redirectIfAuthenticated();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
-      void supabase.auth.getUser().then(({ data }) => {
-        if (cancelled) return;
-        const user = data.user ?? null;
-        if (user && nextPath) {
-          const safeTarget = sanitizeNextPath(nextPath);
-          persistNextTarget(safeTarget);
-          router.replace(safeTarget);
-        } else if (!user) {
-          // remain unauthenticated
-        }
-      });
     });
 
     return () => {
       cancelled = true;
-      authListener?.subscription.unsubscribe();
+      unsubscribe();
     };
   }, [nextPath, nextPathReady, persistNextTarget, router]);
 
@@ -359,9 +298,19 @@ export default function LoginPage() {
     setStatus('Signing in…');
     setError(null);
     setSignupSuggestion(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      if (error instanceof AuthApiError && error.status === 400) {
+
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      // Success is handled by onAuthStateChanged listener
+      setStatusTone('info');
+      setStatus('Signed in. Redirecting…');
+    } catch (err: unknown) {
+      const authError = err as { message?: string; code?: string };
+      console.error("Sign in error", err);
+      const errorMessage = authError.message || 'Authentication failed';
+
+      // Match Supabase behavior for invalid credentials suggestion
+      if (authError.code === 'auth/wrong-password' || authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential') {
         setSignupSuggestion({ email, password });
         setStatusTone('info');
         setStatus(
@@ -369,20 +318,10 @@ export default function LoginPage() {
         );
         setError(null);
       } else {
-        setError(error.message);
+        setError(errorMessage);
         setStatus(null);
       }
-      return;
     }
-    setStatusTone('info');
-    setStatus('Signed in. Redirecting…');
-
-    const safeTarget = sanitizeNextPath(nextPath);
-    if (typeof window !== 'undefined') {
-      persistNextTarget(safeTarget);
-      window.sessionStorage.removeItem(LOGIN_NEXT_STORAGE_KEY);
-    }
-    router.replace(safeTarget);
   }
 
   const handleAcceptSignupSuggestion = useCallback(() => {
@@ -412,9 +351,12 @@ export default function LoginPage() {
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) {
+        // Silently fail or log, don't block auth? 
+        // Original code threw error.
         throw new Error(json?.error ?? 'Failed to record legal consents');
       }
     } catch (error) {
+      console.error("Failed to submit consents", error);
       throw error instanceof Error ? error : new Error('Failed to record legal consents');
     }
   }
@@ -445,31 +387,15 @@ export default function LoginPage() {
       setStatus(null);
       return;
     }
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { emailRedirectTo: redirectTo },
-    });
-    if (error) {
-      setError(error.message);
-      setStatus(null);
-      return;
-    }
 
-    if (data.user?.id) {
-      try {
-        await submitSignupConsents(data.user.id);
-      } catch (consentError) {
-        setError(consentError instanceof Error ? consentError.message : 'Failed to record legal consents.');
-        setStatus(null);
-        if (data.session) {
-          await supabase.auth.signOut().catch(() => undefined);
-        }
-        return;
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      if (user?.uid) {
+        await submitSignupConsents(user.uid);
       }
-    }
 
-    if (data.session) {
       setStatusTone('success');
       setStatus('Account created. Redirecting…');
       const target = sanitizeNextPath('/generate');
@@ -478,9 +404,11 @@ export default function LoginPage() {
         window.sessionStorage.removeItem(LOGIN_NEXT_STORAGE_KEY);
       }
       router.replace(target);
-    } else {
-      setStatusTone('success');
-      setStatus('Check your inbox to confirm your email.');
+
+    } catch (err: unknown) {
+      const authError = err as { message?: string };
+      setError(authError.message || 'An error occurred');
+      setStatus(null);
     }
   }
 
@@ -489,67 +417,34 @@ export default function LoginPage() {
     setStatusTone('info');
     setStatus('Sending reset link…');
     setError(null);
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: siteUrl || undefined });
-    if (error) {
-      setError(error.message);
+
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setStatusTone('info');
+      setStatus('Password reset email sent.');
+    } catch (err: unknown) {
+      const authError = err as { message?: string };
+      setError(authError.message || 'An error occurred');
       setStatus(null);
-      return;
     }
-    setStatusTone('info');
-    setStatus('Password reset email sent.');
   }
 
   async function signInWithGoogle() {
     setError(null);
-    if (!siteUrl) {
-      setStatusTone('info');
-      setStatus('Google sign-in requires NEXT_PUBLIC_SITE_URL to be set.');
-      return;
-    }
     setStatusTone('info');
     setStatus('Redirecting to Google…');
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo,
-        skipBrowserRedirect: true,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        },
-      },
-    });
-    if (error) {
-      setError(error.message);
+
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      // Auth listener will handle redirect
+    } catch (err: unknown) {
+      const authError = err as { message?: string };
+      setError(authError.message || 'An error occurred');
       setStatus(null);
-      return;
-    }
-    if (data?.url) {
-      if (typeof window !== 'undefined') {
-        const safeNext = sanitizeNextPath(nextPath);
-        persistNextTarget(safeNext);
-      }
-      window.location.href = data.url;
     }
   }
 
-  useEffect(() => {
-    if (!nextPathReady) return;
-    let cancelled = false;
-    supabase.auth.getSession().then(({ data }) => {
-      const session = data.session ?? null;
-      if (cancelled) return;
-      if (session?.access_token) {
-        const safeTarget = sanitizeNextPath(nextPath);
-        persistNextTarget(safeTarget);
-        router.replace(safeTarget);
-      } else {
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [router, nextPath, persistNextTarget, nextPathReady]);
 
   const effectiveMode: AuthMode = mode === 'reset' ? 'signin' : mode;
 
@@ -709,7 +604,7 @@ export default function LoginPage() {
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
                     className="w-full rounded-input border border-border bg-bg px-3 py-2"
-                  placeholder={authCopy.placeholders.passwordNew}
+                    placeholder={authCopy.placeholders.passwordNew}
                     autoComplete="new-password"
                   />
                 </label>
@@ -736,7 +631,7 @@ export default function LoginPage() {
                       )}
                       required
                     />
-                  <span className={clsx(termsError && 'text-state-warning')}>
+                    <span className={clsx(termsError && 'text-state-warning')}>
                       {renderTermsStatement()}
                     </span>
                   </label>
@@ -808,23 +703,25 @@ export default function LoginPage() {
               <input
                 type="email"
                 required
-                ref={emailRef}
                 name="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onFocus={syncInputState}
                 className="w-full rounded-input border border-border bg-bg px-3 py-2"
-                placeholder="you@domain.com"
-                autoComplete="email"
+                placeholder={authCopy.placeholders.email}
               />
             </label>
-            <div className="flex justify-between text-xs">
-              <button type="button" onClick={() => setMode('signin')} className="text-text-secondary hover:underline">
-                {authCopy.links.backToSignIn}
-              </button>
-            </div>
-            <button type="submit" className="w-full rounded-input border border-border bg-white px-3 py-2 text-sm font-medium transition hover:bg-bg">
+            <button
+              type="submit"
+              className="w-full rounded-input bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:bg-accentSoft"
+            >
               {authCopy.actions.reset}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('signin')}
+              className="w-full text-center text-xs font-medium text-text-secondary hover:underline"
+            >
+              {authCopy.back}
             </button>
           </form>
         )}
@@ -832,40 +729,16 @@ export default function LoginPage() {
         {status && (
           <div
             className={clsx(
-              'rounded-card border px-3 py-3 text-sm font-medium',
-              statusTone === 'success'
-                ? 'border-accent bg-accent/10 text-accent'
-                : 'border-border bg-bg text-text-secondary'
+              'rounded-card p-3 text-sm',
+              statusTone === 'error' && 'bg-red-50 text-red-600',
+              statusTone === 'success' && 'bg-green-50 text-green-600',
+              statusTone === 'info' && 'bg-bg text-text-secondary'
             )}
           >
             {status}
           </div>
         )}
-        {mode === 'signin' && signupSuggestion && (
-          <div className="rounded-card border border-dashed border-border bg-white/75 px-3 py-3 text-xs text-text-secondary">
-            <p className="text-sm font-semibold text-text-primary">New here?</p>
-            <p className="mt-1">
-              {formatTemplate(authCopy.signupSuggestion.body, { email: signupSuggestion.email })}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleAcceptSignupSuggestion}
-                className="rounded-pill bg-accent px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-accentSoft"
-              >
-                {authCopy.signupSuggestion.accept}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSignupSuggestion(null)}
-                className="rounded-pill border border-border px-3 py-1.5 text-sm font-semibold text-text-secondary transition hover:bg-bg"
-              >
-                {authCopy.signupSuggestion.decline}
-              </button>
-            </div>
-          </div>
-        )}
-        {error && <p className="text-xs text-state-warning">{error}</p>}
+        {error && <div className="rounded-card bg-red-50 p-3 text-sm text-red-600">{error}</div>}
       </div>
     </main>
   );

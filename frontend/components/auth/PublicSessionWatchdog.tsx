@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { auth } from '@/lib/firebase-client';
 
 const REFRESH_THROTTLE_MS = 2000;
 
@@ -15,21 +15,22 @@ export function PublicSessionWatchdog() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
     const refresh = async () => {
       if (document.visibilityState === 'hidden') return;
       const now = Date.now();
       if (now - lastAttemptRef.current < REFRESH_THROTTLE_MS) return;
       lastAttemptRef.current = now;
 
-      const { data } = await supabase.auth.getSession();
-      if (data.session?.user) {
-        notifyAccountRefresh();
-        return;
-      }
-
-      const refreshed = await supabase.auth.refreshSession().catch(() => null);
-      if (refreshed?.data?.session?.user) {
-        notifyAccountRefresh();
+      const user = auth.currentUser;
+      if (user) {
+        // Force token refresh to ensure it's still valid
+        try {
+          await user.getIdToken(true);
+          notifyAccountRefresh();
+        } catch {
+          // Token refresh failed - user might need to re-authenticate
+        }
       }
     };
 

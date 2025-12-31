@@ -120,6 +120,6 @@ export {
 } from './PageTransition';
 
 // Existing components
-export { default as EngineIcon } from './EngineIcon';
-export { default as UIIcon } from './UIIcon';
-export { default as AudioEqualizerBadge } from './AudioEqualizerBadge';
+export { EngineIcon } from './EngineIcon';
+export { UIIcon } from './UIIcon';
+export { AudioEqualizerBadge } from './AudioEqualizerBadge';

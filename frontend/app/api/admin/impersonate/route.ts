@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminErrorToResponse, requireAdmin } from '@/server/admin';
-import { createSupabaseRouteClient } from '@/lib/supabase-ssr';
-import { getSupabaseAdmin } from '@/server/supabase-admin';
 import { logAdminAction } from '@/server/admin-audit';
+import { getRouteAuthContext } from '@/lib/supabase-ssr';
+import { getFirebaseAuth, isFirebaseAdminConfigured } from '@/server/firebase-admin';
 import {
   encodeImpersonationSession,
   encodeImpersonationTarget,
@@ -58,9 +58,9 @@ export async function POST(req: NextRequest) {
     return adminErrorToResponse(error);
   }
 
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (!isFirebaseAdminConfigured()) {
     return NextResponse.json(
-      { ok: false, error: 'SERVICE_ROLE_NOT_CONFIGURED', message: 'Supabase service role key is not set.' },
+      { ok: false, error: 'FIREBASE_ADMIN_NOT_CONFIGURED', message: 'Firebase Admin SDK is not configured.' },
       { status: 501 }
     );
   }
@@ -74,56 +74,59 @@ export async function POST(req: NextRequest) {
   const redirectTo = resolveRedirect(payload.redirectTo, WORKSPACE_REDIRECT);
   const returnTo = resolveRedirect(payload.returnTo, `/admin/users/${targetUserId}`);
 
-  const supabase = createSupabaseRouteClient();
-  const {
-    data: { session: currentSession },
-  } = await supabase.auth.getSession();
-
-  if (!currentSession?.access_token || !currentSession.refresh_token) {
+  // Get admin's current auth context
+  const { userId: currentAdminId } = await getRouteAuthContext(req);
+  if (!currentAdminId) {
     return NextResponse.json({ ok: false, error: 'Admin session not found' }, { status: 400 });
   }
 
-  const admin = getSupabaseAdmin();
-  const { data: userData, error: userError } = await admin.auth.admin.getUserById(targetUserId);
-  if (userError || !userData?.user) {
-    return NextResponse.json({ ok: false, error: userError?.message ?? 'User not found' }, { status: 404 });
+  // Verify target user exists
+  const auth = getFirebaseAuth();
+  let targetUser;
+  try {
+    targetUser = await auth.getUser(targetUserId);
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: 'User not found' }, { status: 404 });
   }
 
-  const targetEmail = userData.user.email;
+  const targetEmail = targetUser.email;
   if (!targetEmail) {
     return NextResponse.json({ ok: false, error: 'User has no email associated' }, { status: 400 });
   }
 
-  const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
-    type: 'magiclink',
-    email: targetEmail,
+  // Create a custom token for impersonation
+  // Note: The client will need to sign in with this custom token
+  let customToken: string;
+  try {
+    customToken = await auth.createCustomToken(targetUserId, {
+      impersonatedBy: adminUserId,
+      impersonationStarted: new Date().toISOString(),
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { ok: false, error: 'Failed to create impersonation token', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+
+  // Return the custom token - client will use signInWithCustomToken
+  const response = NextResponse.json({
+    ok: true,
+    customToken,
+    redirectTo,
+    targetUser: {
+      id: targetUserId,
+      email: targetEmail,
+    },
   });
-  if (linkError || !linkData?.properties) {
-    return NextResponse.json({ ok: false, error: linkError?.message ?? 'Unable to generate login link' }, { status: 500 });
-  }
 
-  const properties = linkData.properties as Record<string, unknown>;
-  const emailOtp =
-    (typeof properties.email_otp === 'string' && properties.email_otp) ||
-    (typeof properties.user_email_otp === 'string' && properties.user_email_otp) ||
-    null;
-  if (!emailOtp) {
-    return NextResponse.json({ ok: false, error: 'Magic link token unavailable' }, { status: 500 });
-  }
-
-  const { error: verifyError } = await supabase.auth.verifyOtp({ email: targetEmail, token: emailOtp, type: 'magiclink' });
-  if (verifyError) {
-    return NextResponse.json({ ok: false, error: verifyError.message ?? 'Failed to exchange impersonation token' }, { status: 500 });
-  }
-
-  const response = NextResponse.redirect(new URL(redirectTo, req.url));
   const cookieOptions = impersonationCookieOptions();
   response.cookies.set(
     impersonationCookieNames.session,
     encodeImpersonationSession({
       adminId: adminUserId,
-      accessToken: currentSession.access_token,
-      refreshToken: currentSession.refresh_token,
+      accessToken: 'firebase-impersonation',
+      refreshToken: '',
       returnTo,
     }),
     cookieOptions

@@ -1,97 +1,88 @@
-import { cookies } from 'next/headers';
-import type { NextRequest, NextResponse } from 'next/server';
-import { createServerClient, type CookieOptionsWithName } from '@supabase/ssr';
+import { NextRequest, NextResponse } from 'next/server';
+import { verifyIdToken } from '@/server/firebase-admin';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+// Firebase Server Auth - Replaces Supabase SSR
+// This module handles server-side token verification using Firebase Admin SDK
 
-function assertSupabaseEnv() {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    throw new Error('Missing Supabase env vars: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
-  }
-}
-
-function resolveCookieDomain(): string | undefined {
-  const explicit = process.env.NEXT_PUBLIC_COOKIE_DOMAIN?.trim() || process.env.COOKIE_DOMAIN?.trim();
-  if (explicit) {
-    if (explicit.includes('localhost') || explicit.includes('127.0.0.1')) return undefined;
-    return explicit;
-  }
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || '';
-  if (siteUrl.includes('maxvideoai.com')) {
-    return 'maxvideoai.com';
-  }
-  return undefined;
-}
-
-const cookieDomain = resolveCookieDomain();
-const cookieOptions: CookieOptionsWithName = {
-  ...(cookieDomain ? { domain: cookieDomain } : {}),
-  path: '/',
-  sameSite: 'lax',
-  secure: process.env.NODE_ENV === 'production',
+export type AuthContext = {
+  userId: string | null;
+  userEmail: string | null;
 };
 
-function createServerClientWithCookies(cookieStore: ReturnType<typeof cookies>, cookieOptions?: CookieOptionsWithName) {
-  assertSupabaseEnv();
-  return createServerClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
-    cookieOptions,
-    cookies: {
-      getAll: () => cookieStore.getAll(),
-      setAll: (cookiesToSet) => {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          try {
-            cookieStore.set(name, value, options);
-          } catch {
-            // Some contexts (server components) are read-only for cookies.
-          }
-        });
-      },
-    },
-  });
+/**
+ * Get authenticated user from request Authorization header
+ * Uses Firebase Admin SDK to verify the ID token
+ */
+export async function getRouteAuthContext(req: NextRequest): Promise<AuthContext> {
+  const authHeader = req.headers.get('Authorization');
+  let userId: string | null = null;
+  let userEmail: string | null = null;
+
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.split('Bearer ')[1];
+    try {
+      const verified = await verifyIdToken(token);
+      if (verified) {
+        userId = verified.uid;
+        userEmail = verified.email ?? null;
+      }
+    } catch (e) {
+      console.error('[Auth] Firebase token verification failed:', e);
+    }
+  }
+
+  return { userId, userEmail };
 }
 
-export function createSupabaseServerClient() {
-  const cookieStore = cookies();
-  return createServerClientWithCookies(cookieStore, cookieOptions);
+/**
+ * Middleware session update - extracts user from Firebase token
+ */
+export async function updateSession(req: NextRequest, _res: NextResponse) {
+  const authHeader = req.headers.get('Authorization');
+  let userId: string | null = null;
+
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.split('Bearer ')[1];
+    const verified = await verifyIdToken(token);
+    userId = verified?.uid ?? null;
+  }
+
+  return { userId, error: null };
 }
 
+/**
+ * Create a mock Supabase-like client for backward compatibility
+ * This allows gradual migration of code that still uses Supabase patterns
+ * @deprecated Use getRouteAuthContext instead
+ */
 export function createSupabaseRouteClient() {
-  const cookieStore = cookies();
-  return createServerClientWithCookies(cookieStore, cookieOptions);
-}
-
-export function createSupabaseMiddlewareClient(req: NextRequest, res: NextResponse) {
-  assertSupabaseEnv();
-  return createServerClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
-    cookieOptions,
-    cookies: {
-      getAll: () => req.cookies.getAll(),
-      setAll: (cookiesToSet) => {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          res.cookies.set(name, value, options);
-        });
-      },
+  console.warn('[DEPRECATED] createSupabaseRouteClient is deprecated. Use getRouteAuthContext instead.');
+  return {
+    auth: {
+      getUser: async () => ({
+        data: { user: null },
+        error: { message: 'Use Firebase auth instead' },
+      }),
+      getSession: async () => ({
+        data: { session: null },
+        error: null,
+      }),
     },
-  });
+  };
 }
 
-export async function updateSession(req: NextRequest, res: NextResponse) {
-  const supabase = createSupabaseMiddlewareClient(req, res);
-  const { data, error } = await supabase.auth.getClaims();
-  const claims = data?.claims as { sub?: string } | null | undefined;
-  const userId = typeof claims?.sub === 'string' ? claims.sub : null;
-  return { supabase, userId, error };
+/**
+ * @deprecated Use getRouteAuthContext instead
+ */
+export function createSupabaseServerClient() {
+  console.warn('[DEPRECATED] createSupabaseServerClient is deprecated. Use getRouteAuthContext instead.');
+  return createSupabaseRouteClient();
 }
 
-export async function getRouteAuthContext(_req?: NextRequest) {
-  void _req;
-  const supabase = createSupabaseRouteClient();
-  const [{ data: sessionData }, { data: userData }] = await Promise.all([
-    supabase.auth.getSession(),
-    supabase.auth.getUser(),
-  ]);
-  const session = sessionData.session ?? null;
-  const sessionUserId = userData.user?.id ?? null;
-  return { supabase, session, userId: sessionUserId };
+/**
+ * @deprecated Use getRouteAuthContext instead
+ */
+export function createSupabaseMiddlewareClient(_req: NextRequest, _res: NextResponse) {
+  console.warn('[DEPRECATED] createSupabaseMiddlewareClient is deprecated.');
+  return createSupabaseRouteClient();
 }

@@ -1,8 +1,8 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
-import { ensureAssetSchema } from '@/lib/schema';
-import { query } from '@/lib/db';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { uploadToFirebaseStorageServer, isFirebaseStorageConfigured, deleteFromFirebaseStorageServer } from '@/lib/firebase-storage';
+import { getDb, isFirestoreConfigured } from '@/lib/firestore-db';
 
 export type UploadResult = {
   url: string;
@@ -149,6 +149,11 @@ export async function uploadImageToStorage(params: {
   fileName?: string | null;
   prefix?: string;
 }): Promise<UploadResult> {
+  // Use Firebase Storage if S3 is not configured
+  if (!isStorageConfigured() && isFirebaseStorageConfigured()) {
+    return uploadToFirebaseStorageServer(params);
+  }
+
   const client = getS3Client();
   const safeMime = params.mime && params.mime.startsWith('image/') ? params.mime : 'image/png';
   const extension = inferExtension(safeMime, 'png');
@@ -188,6 +193,9 @@ const DEFAULT_ALLOWED_HOSTS = new Set([
   'blob.vercel-storage.com',
   'storage.googleapis.com',
   's3.amazonaws.com',
+  'firebasestorage.googleapis.com',
+  'fal.media',
+  'v3.fal.media',
 ]);
 
 function buildHostAllowList(): Set<string> {
@@ -265,27 +273,42 @@ async function deleteObjectFromStorage(key: string): Promise<void> {
 export async function deleteUserAsset(params: { assetId: string; userId: string }): Promise<'deleted' | 'not_found'> {
   const { assetId, userId } = params;
   if (!assetId || !userId) return 'not_found';
-  await ensureAssetSchema();
-  const rows = await query<{ url: string }>(
-    `DELETE FROM user_assets WHERE asset_id = $1 AND user_id = $2 RETURNING url`,
-    [assetId, userId]
-  );
 
-  if (!rows.length) {
-    return 'not_found';
-  }
-
-  const [record] = rows;
-  const key = extractObjectKeyFromUrl(record.url);
-  if (key) {
+  // Use Firestore if configured
+  if (isFirestoreConfigured()) {
     try {
-      await deleteObjectFromStorage(key);
+      const db = getDb();
+      const docRef = db.collection('userAssets').doc(assetId);
+      const doc = await docRef.get();
+
+      if (!doc.exists) {
+        return 'not_found';
+      }
+
+      const data = doc.data();
+      if (data?.userId !== userId) {
+        return 'not_found';
+      }
+
+      await docRef.delete();
+
+      // Try to delete from storage
+      if (data?.storageKey && isFirebaseStorageConfigured()) {
+        try {
+          await deleteFromFirebaseStorageServer(data.storageKey);
+        } catch (error) {
+          console.error('[storage] failed to delete from Firebase Storage', error);
+        }
+      }
+
+      return 'deleted';
     } catch (error) {
-      console.error('[storage] failed to delete object', key, error);
+      console.error('[storage] Firestore delete failed', error);
+      return 'not_found';
     }
   }
 
-  return 'deleted';
+  return 'not_found';
 }
 
 const ALLOWED_HOSTS = buildHostAllowList();
@@ -331,25 +354,33 @@ export async function recordUserAsset(params: {
   size: number | null;
   source: string;
   metadata?: Record<string, unknown>;
+  storageKey?: string;
 }) {
-  const { assetId = randomUUID(), userId, url, mime, width, height, size, source, metadata } = params;
-  await ensureAssetSchema();
-  await query(
-    `INSERT INTO user_assets (asset_id, user_id, url, mime_type, width, height, size_bytes, source, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
-     ON CONFLICT (asset_id) DO NOTHING`,
-    [
-      assetId,
-      userId ?? null,
-      url,
-      mime,
-      width,
-      height,
-      size ?? null,
-      source,
-      metadata ? JSON.stringify(metadata) : null,
-    ]
-  );
+  const { assetId = randomUUID(), userId, url, mime, width, height, size, source, metadata, storageKey } = params;
+
+  // Use Firestore if configured
+  if (isFirestoreConfigured()) {
+    try {
+      const db = getDb();
+      await db.collection('userAssets').doc(assetId).set({
+        assetId,
+        userId: userId ?? null,
+        url,
+        mimeType: mime,
+        width,
+        height,
+        sizeBytes: size ?? null,
+        source,
+        metadata: metadata ?? null,
+        storageKey: storageKey ?? null,
+        createdAt: new Date(),
+      });
+      return assetId;
+    } catch (error) {
+      console.error('[storage] Firestore recordUserAsset failed', error);
+    }
+  }
+
   return assetId;
 }
 
@@ -366,6 +397,18 @@ export async function uploadFileBuffer(params: {
   cacheControl?: string;
   acl?: string | null;
 }): Promise<{ key: string; url: string }> {
+  // Use Firebase Storage if S3 is not configured
+  if (!isStorageConfigured() && isFirebaseStorageConfigured()) {
+    const result = await uploadToFirebaseStorageServer({
+      data: params.data,
+      mime: params.mime,
+      userId: params.userId,
+      fileName: params.fileName,
+      prefix: params.prefix ?? 'files',
+    });
+    return { key: result.key, url: result.url };
+  }
+
   const client = getS3Client();
   const extension = inferExtension(params.mime || 'application/octet-stream', 'bin');
   const slug = randomUUID();

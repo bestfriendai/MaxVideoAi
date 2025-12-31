@@ -8,7 +8,16 @@ import { useRequireAuth } from '@/hooks/useRequireAuth';
 import { useUserPreferences } from '@/hooks/useUserPreferences';
 import { useMarketingPreference } from '@/hooks/useMarketingPreference';
 import { FEATURES } from '@/content/feature-flags';
-import type { User } from '@supabase/supabase-js';
+// Using local type compatible with Firebase user
+type User = {
+  id: string;
+  email?: string | null;
+  user_metadata?: {
+    full_name?: string;
+    name?: string;
+    avatar_url?: string;
+  };
+} | null;
 import deepmerge from 'deepmerge';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { authFetch } from '@/lib/authFetch';
@@ -227,7 +236,7 @@ function TabLink({
 }
 
 type AccountTabProps = {
-  user: User | null;
+  user: User;
   copy: SettingsCopy['account'];
 };
 

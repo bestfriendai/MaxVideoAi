@@ -1,0 +1,44 @@
+{
+  "stripe": {
+    "secret_key": "",
+    "webhook_secret": "",
+    "price_plus": "",
+    "price_pro": "",
+    "publishable_key": ""
+  },
+  "supabase": {
+    "url": "",
+    "anon_key": "",
+    "service_role_key": ""
+  },
+  "s3": {
+    "bucket": "",
+    "region": "",
+    "access_key_id": "",
+    "secret_access_key": "",
+    "public_base_url": ""
+  },
+  "fal": {
+    "key": "",
+    "api_key": "",
+    "model_pika_22": "",
+    "model_luma_dm": "",
+    "webhook_token": "",
+    "poll_token": ""
+  },
+  "email": {
+    "from": "",
+    "from_name": "",
+    "postmark_server_token": "",
+    "resend_api_key": "",
+    "brevo_smtp_username": "",
+    "brevo_smtp_password": ""
+  },
+  "stripe_connect": {
+    "cogs_vault_account_id": "",
+    "connect_return_url": "",
+    "connect_refresh_url": "",
+    "batch_transfer_threshold_cents": "5000",
+    "batch_transfer_currency": "usd"
+  }
+}

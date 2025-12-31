@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { getUserIdFromRequest } from '@/lib/user';
-import { createSupabaseServerClient } from '@/lib/supabase-ssr';
+import { getRouteAuthContext } from '@/lib/supabase-ssr';
 
 let adminCache: Map<string, boolean> | null = null;
 let cacheExpiry = 0;
@@ -68,18 +68,14 @@ export async function requireAdmin(req?: NextRequest): Promise<string> {
   return userId;
 }
 
+/**
+ * @deprecated Firebase Auth doesn't store session in cookies
+ * Use getUserIdFromRequest with the NextRequest instead
+ */
 export async function getUserIdFromCookies(): Promise<string | null> {
-  try {
-    const supabase = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user?.id) {
-      return user.id;
-    }
-  } catch {
-    return null;
-  }
+  // Firebase Auth doesn't use cookies for server-side session management
+  // This function is deprecated - use getUserIdFromRequest(req) instead
+  console.warn('[admin] getUserIdFromCookies is deprecated with Firebase Auth');
   return null;
 }
 

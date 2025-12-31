@@ -106,7 +106,7 @@ export const useUIStore = create<UIState>()(
       },
 
       // Modal actions
-      openModal: (type, data = null) => {
+      openModal: (type, data = undefined) => {
         set({ activeModal: type, modalData: data });
       },
 

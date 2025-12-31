@@ -46,6 +46,7 @@ export const BottomNav = memo(function BottomNav({
   const pathname = usePathname();
 
   const isActive = (href: string) => {
+    if (!pathname) return false;
     if (href === '/dashboard') {
       return pathname === '/dashboard';
     }

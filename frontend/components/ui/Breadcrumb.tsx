@@ -86,7 +86,7 @@ export const Breadcrumb = memo(function Breadcrumb({
   const pathname = usePathname();
 
   const breadcrumbs = useMemo(() => {
-    const generatedItems = items || generateBreadcrumbs(pathname);
+    const generatedItems = items || generateBreadcrumbs(pathname ?? '/');
 
     if (generatedItems.length <= maxItems) {
       return generatedItems;

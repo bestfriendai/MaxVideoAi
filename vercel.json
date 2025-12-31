@@ -11,9 +11,8 @@
   "redirects": [
     { "source": "/gallery", "destination": "/examples", "permanent": true }
   ],
-  "crons": [
-    { "path": "/api/stripe/batch-transfers", "schedule": "0 3 * * *" },
-    { "path": "/api/cron/fal-poll", "schedule": "* * * * *" },
-    { "path": "/api/cron/reconcile-missing-jobs", "schedule": "*/10 * * * *" }
-  ]
+    "env": {
+    "NEXT_PUBLIC_API_BASE": "/api",
+    "NEXT_PUBLIC_FIREBASE_FUNCTIONS_URL": "https://us-central1-maxvideoai-backend.cloudfunctions.net"
+  }
 }

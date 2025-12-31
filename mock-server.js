@@ -647,6 +647,24 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (method === 'GET' && url.pathname === '/api/legal/cookies/version') {
+    return sendJson(res, 200, { ok: true, version: '1.0' });
+  }
+
+  if (method === 'GET' && url.pathname === '/api/legal/cookies') {
+    return sendJson(res, 200, {
+      ok: true,
+      policy: {
+        version: '1.0',
+        lastUpdated: '2024-01-01T00:00:00Z',
+        categories: [
+          { id: 'essential', name: 'Essential', required: true, description: 'Required for core functionality' },
+          { id: 'analytics', name: 'Analytics', required: false, description: 'Helps us improve the product' }
+        ]
+      }
+    });
+  }
+
   if (method === 'GET' && url.pathname === '/api/jobs') {
     const cursor = url.searchParams.get('cursor') || null;
     const limitParam = parseInt(url.searchParams.get('limit') || '24', 10);
@@ -658,6 +676,68 @@ const server = http.createServer((req, res) => {
 
   if (method === 'GET' && url.pathname === '/healthz') {
     return sendJson(res, 200, { ok: true });
+  }
+
+
+  // --- Supabase Auth Mocks ---
+
+  if (method === 'POST' && (url.pathname === '/auth/v1/signup' || url.pathname === '/auth/v1/token')) {
+    let raw = '';
+    req.on('data', c => raw += c);
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : {};
+      const isSignup = url.pathname.includes('signup');
+
+      const user = {
+        id: 'mock-user-id-123',
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: body.email || 'mock@example.com',
+        email_confirmed_at: new Date().toISOString(),
+        phone: '',
+        confirmed_at: new Date().toISOString(),
+        last_sign_in_at: new Date().toISOString(),
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: body.data || {},
+        identities: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const session = {
+        access_token: 'mock-access-token-' + Date.now(),
+        token_type: 'bearer',
+        expires_in: 3600,
+        refresh_token: 'mock-refresh-token-' + Date.now(),
+        user: user
+      };
+
+      // For signup, if we simulate auto-confirm, we return the user (and session if implicit).
+      // Supabase GoTrue client expects { user, session } or just user depending on config.
+      // Usually returning session is enough for auto-login.
+
+      return sendJson(res, 200, isSignup ? { ...user, session } : session);
+    });
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/auth/v1/user') {
+    // Return the mock user for any token
+    return sendJson(res, 200, {
+      id: 'mock-user-id-123',
+      aud: 'authenticated',
+      role: 'authenticated',
+      email: 'mock@example.com',
+      email_confirmed_at: new Date().toISOString(),
+      app_metadata: { provider: 'email', providers: ['email'] },
+      user_metadata: {},
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  if (method === 'POST' && url.pathname === '/auth/v1/logout') {
+    return sendJson(res, 204, {});
   }
 
   sendJson(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'Route not mocked.' } });

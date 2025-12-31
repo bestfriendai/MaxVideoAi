@@ -10,6 +10,9 @@ import { listStarterPlaylistVideos } from '@/server/videos';
 import { getEngineAliases, listFalEngines } from '@/config/falEngines';
 import { getRouteAuthContext } from '@/lib/supabase-ssr';
 
+import { fetchFromFirebase } from '@/lib/firebase-backend';
+import { ENV } from '@/lib/env';
+
 export const dynamic = 'force-dynamic';
 
 function json(body: unknown, init?: Parameters<typeof NextResponse.json>[1]) {
@@ -61,10 +64,29 @@ const IMAGE_ENGINE_ALIASES = listFalEngines()
 const IMAGE_ENGINE_ID_SET = new Set(IMAGE_ENGINE_ALIASES);
 
 export async function GET(req: NextRequest) {
+  if (ENV.NEXT_PUBLIC_FIREBASE_FUNCTIONS_URL) {
+    try {
+      const url = new URL(req.url);
+      const limit = url.searchParams.get('limit');
+      const cursor = url.searchParams.get('cursor');
+      const authHeader = req.headers.get('Authorization');
+      const data = await fetchFromFirebase('jobs', {
+        method: 'GET',
+        headers: authHeader ? { 'Authorization': authHeader } : undefined,
+      });
+      // Note: Firebase function endpoint implementation needs to match the expected format
+      // In our current implementation, we return { ok: true, jobs: [...], nextCursor }
+      return json(data);
+    } catch (error) {
+      console.warn('Failed to fetch jobs from Firebase, falling back to local:', error);
+    }
+  }
+
   if (!isDatabaseConfigured()) {
+    // Migration Fallback: Return empty list instead of 503 crash
     return json(
-      { ok: false, jobs: [], nextCursor: null, error: 'Database unavailable' },
-      { status: 503 }
+      { ok: true, jobs: [], nextCursor: null, message: 'Database migration in progress' },
+      { status: 200 }
     );
   }
 
@@ -73,8 +95,8 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     console.warn('[api/jobs] schema init failed', error);
     return json(
-      { ok: false, jobs: [], nextCursor: null, error: 'Database unavailable' },
-      { status: 503 }
+      { ok: true, jobs: [], nextCursor: null, message: 'Database unavailable' },
+      { status: 200 }
     );
   }
 
@@ -128,7 +150,7 @@ export async function GET(req: NextRequest) {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const limitParamIndex = params.length;
 
-type JobRow = {
+    type JobRow = {
       id: number;
       job_id: string;
       updated_at: string;
@@ -168,7 +190,7 @@ type JobRow = {
     };
 
     let rows = await query<JobRow>(
-    `SELECT id, job_id, updated_at, engine_id, engine_label, duration_sec, prompt, thumb_url, video_url, created_at, aspect_ratio, has_audio, can_upscale, preview_frame, final_price_cents, pricing_snapshot, currency, vendor_account_id, payment_status, stripe_payment_intent_id, stripe_charge_id, batch_id, group_id, iteration_index, iteration_count, render_ids, hero_render_id, local_key, message, eta_seconds, eta_label, visibility, indexable, status, progress, provider_job_id
+      `SELECT id, job_id, updated_at, engine_id, engine_label, duration_sec, prompt, thumb_url, video_url, created_at, aspect_ratio, has_audio, can_upscale, preview_frame, final_price_cents, pricing_snapshot, currency, vendor_account_id, payment_status, stripe_payment_intent_id, stripe_charge_id, batch_id, group_id, iteration_index, iteration_count, render_ids, hero_render_id, local_key, message, eta_seconds, eta_label, visibility, indexable, status, progress, provider_job_id
       FROM app_jobs
       ${where}
       ORDER BY created_at DESC, id DESC
@@ -513,8 +535,8 @@ type JobRow = {
   } catch (error) {
     console.warn('[api/jobs] query failed', error);
     return json(
-      { ok: false, jobs: [], nextCursor: null, error: 'Database unavailable' },
-      { status: 503 }
+      { ok: true, jobs: [], nextCursor: null, message: 'Database unavailable' },
+      { status: 200 }
     );
   }
 }

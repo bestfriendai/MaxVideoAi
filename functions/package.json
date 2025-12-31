@@ -1,0 +1,42 @@
+{
+  "name": "maxvideoai-functions",
+  "version": "1.0.0",
+  "description": "Firebase Functions for MaxVideoAI Backend",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "shell": "npm run build && firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "keywords": [
+    "firebase",
+    "functions",
+    "maxvideoai"
+  ],
+  "author": "MaxVideoAI",
+  "license": "BUSL-1.1",
+  "dependencies": {
+    "firebase-functions": "^4.7.0",
+    "firebase-admin": "^12.0.0",
+    "cors": "^2.8.5",
+    "stripe": "^14.24.0",
+    "@supabase/supabase-js": "^2.45.4",
+    "pg": "^8.11.3",
+    "nodemailer": "^7.0.9",
+    "resend": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/pg": "^8.10.2",
+    "@types/cors": "^2.8.17",
+    "@types/nodemailer": "^7.0.2",
+    "typescript": "^5.4.5",
+    "firebase-functions-test": "^3.1.0"
+  },
+  "engines": {
+    "node": "22"
+  }
+}

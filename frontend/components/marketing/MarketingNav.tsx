@@ -3,7 +3,11 @@
 import Image from 'next/image';
 import clsx from 'clsx';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
+// Local session type compatible with Firebase
+type Session = {
+  user: { id: string; email?: string | null } | null;
+  access_token?: string | null;
+} | null;
 import { Link, usePathname } from '@/i18n/navigation';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { LanguageToggle } from '@/components/marketing/LanguageToggle';

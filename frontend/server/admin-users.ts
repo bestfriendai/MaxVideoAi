@@ -129,8 +129,8 @@ async function fetchProfile(userId: string): Promise<AdminUserProfile | null> {
       email: user.email ?? null,
       createdAt: user.created_at ?? null,
       lastSignInAt: user.last_sign_in_at ?? null,
-      appMetadata: user.app_metadata,
-      userMetadata: user.user_metadata,
+      appMetadata: user.app_metadata ?? null,
+      userMetadata: user.user_metadata ?? null,
       isAdmin: isAdminUser,
     };
   } catch (error) {

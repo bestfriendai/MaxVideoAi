@@ -1,49 +1,151 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { getUserById, isFirebaseAdminConfigured, getFirebaseAuth } from './firebase-admin';
 
-type SupabaseAuthClient = SupabaseClient<Record<string, never>>;
+// Firebase Admin SDK - Replaces Supabase Admin
+// This module provides admin-level user management via Firebase
 
-let client: SupabaseAuthClient | null = null;
-
-function isConfigured(): boolean {
-  return Boolean((process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').trim() && (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim());
+export function isConfigured(): boolean {
+  return isFirebaseAdminConfigured();
 }
 
-export function getSupabaseAdmin(): SupabaseAuthClient {
-  if (!isConfigured()) {
-    throw new Error('Supabase service role not configured');
-  }
-  if (!client) {
-    client = createClient(
-      String(process.env.NEXT_PUBLIC_SUPABASE_URL),
-      String(process.env.SUPABASE_SERVICE_ROLE_KEY),
-      {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
+/**
+ * Get a Firebase Admin client (for backward compatibility)
+ * @deprecated Use Firebase Admin SDK functions directly
+ */
+export function getSupabaseAdmin() {
+  console.warn('[DEPRECATED] getSupabaseAdmin is deprecated. Use Firebase Admin SDK directly.');
+
+  return {
+    auth: {
+      admin: {
+        getUserById: async (userId: string) => {
+          if (!isConfigured()) {
+            return { data: { user: null }, error: { message: 'Firebase Admin not configured' } };
+          }
+          try {
+            const auth = getFirebaseAuth();
+            const user = await auth.getUser(userId);
+            return {
+              data: {
+                user: {
+                  id: user.uid,
+                  email: user.email,
+                  phone: user.phoneNumber,
+                  created_at: user.metadata.creationTime,
+                  last_sign_in_at: user.metadata.lastSignInTime,
+                  email_confirmed_at: user.emailVerified ? user.metadata.creationTime : null,
+                  user_metadata: user.customClaims ?? {},
+                  app_metadata: {},
+                  factors: user.multiFactor?.enrolledFactors ?? [],
+                  identities: [],
+                  role: user.customClaims?.role ?? null,
+                  banned_until: user.disabled ? 'indefinite' : null,
+                },
+              },
+              error: null,
+            };
+          } catch (error) {
+            return {
+              data: { user: null },
+              error: { message: error instanceof Error ? error.message : 'Unknown error' },
+            };
+          }
         },
-      }
-    );
-  }
-  return client;
+        listUsers: async ({ page = 1, perPage = 100 }: { page?: number; perPage?: number } = {}) => {
+          if (!isConfigured()) {
+            return { data: { users: [] }, error: { message: 'Firebase Admin not configured' } };
+          }
+          try {
+            const auth = getFirebaseAuth();
+            const result = await auth.listUsers(perPage);
+            return {
+              data: {
+                users: result.users.map(user => ({
+                  id: user.uid,
+                  email: user.email,
+                  phone: user.phoneNumber,
+                  created_at: user.metadata.creationTime,
+                  last_sign_in_at: user.metadata.lastSignInTime,
+                  email_confirmed_at: user.emailVerified ? user.metadata.creationTime : null,
+                  user_metadata: user.customClaims ?? {},
+                  app_metadata: {},
+                })),
+              },
+              error: null,
+            };
+          } catch (error) {
+            return {
+              data: { users: [] },
+              error: { message: error instanceof Error ? error.message : 'Unknown error' },
+            };
+          }
+        },
+        updateUserById: async (userId: string, attrs: Record<string, unknown>) => {
+          if (!isConfigured()) {
+            return { data: { user: null }, error: { message: 'Firebase Admin not configured' } };
+          }
+          try {
+            const auth = getFirebaseAuth();
+            const updateData: Parameters<typeof auth.updateUser>[1] = {};
+            if (attrs.email) updateData.email = String(attrs.email);
+            if (attrs.phone) updateData.phoneNumber = String(attrs.phone);
+            if (attrs.password) updateData.password = String(attrs.password);
+            if (typeof attrs.disabled === 'boolean') updateData.disabled = attrs.disabled;
+
+            const user = await auth.updateUser(userId, updateData);
+            return {
+              data: {
+                user: {
+                  id: user.uid,
+                  email: user.email,
+                },
+              },
+              error: null,
+            };
+          } catch (error) {
+            return {
+              data: { user: null },
+              error: { message: error instanceof Error ? error.message : 'Unknown error' },
+            };
+          }
+        },
+        deleteUser: async (userId: string) => {
+          if (!isConfigured()) {
+            return { data: null, error: { message: 'Firebase Admin not configured' } };
+          }
+          try {
+            const auth = getFirebaseAuth();
+            await auth.deleteUser(userId);
+            return { data: null, error: null };
+          } catch (error) {
+            return {
+              data: null,
+              error: { message: error instanceof Error ? error.message : 'Unknown error' },
+            };
+          }
+        },
+      },
+    },
+  };
 }
 
+/**
+ * Get user identity by ID
+ */
 export async function getUserIdentity(userId: string): Promise<{ id: string; email: string | null; fullName: string | null } | null> {
   if (!isConfigured()) return null;
+
   try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin.auth.admin.getUserById(userId);
-    if (error || !data?.user) return null;
-    const user = data.user;
-    const email = typeof user.email === 'string' ? user.email : null;
-    const fullName =
-      typeof user.user_metadata?.full_name === 'string'
-        ? user.user_metadata.full_name
-        : typeof user.user_metadata?.name === 'string'
-          ? user.user_metadata.name
-          : null;
-    return { id: user.id, email, fullName };
+    const user = await getUserById(userId);
+    if (user) {
+      return {
+        id: user.id,
+        email: user.email,
+        fullName: user.displayName,
+      };
+    }
   } catch (error) {
-    console.warn('[supabase-admin] getUserIdentity failed', error instanceof Error ? error.message : error);
-    return null;
+    console.warn('[firebase-admin] getUserIdentity failed:', error instanceof Error ? error.message : error);
   }
+
+  return null;
 }

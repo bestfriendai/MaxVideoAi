@@ -11,6 +11,7 @@ import { JsonLd } from '@/components/SeoJsonLd';
 import { I18nProvider } from '@/lib/i18n/I18nProvider';
 import { defaultLocale, localeRegions, locales, type AppLocale } from '@/i18n/locales';
 import { deserializeMessages } from '@/lib/i18n/server';
+import { AuthProvider } from '@/lib/firebase-auth-context';
 type LocaleLayoutProps = {
   children: ReactNode;
   params: { locale: string };
@@ -87,12 +88,12 @@ export default async function LocaleLayout({ children, params }: LocaleLayoutPro
     inLanguage: localeRegions[locale],
     ...(enableSearchSchema
       ? {
-          potentialAction: {
-            '@type': 'SearchAction',
-            target: `${homeUrl}search?q={query}`,
-            'query-input': 'required name=query',
-          },
-        }
+        potentialAction: {
+          '@type': 'SearchAction',
+          target: `${homeUrl}search?q={query}`,
+          'query-input': 'required name=query',
+        },
+      }
       : {}),
   };
 
@@ -101,7 +102,9 @@ export default async function LocaleLayout({ children, params }: LocaleLayoutPro
       <ConsentModeBootstrap />
       <GA4RouteTracker />
       <I18nProvider locale={locale} dictionary={messages} fallback={fallbackMessages}>
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </I18nProvider>
       {process.env.NODE_ENV === 'production' ? <VercelAnalytics /> : null}
       <AnalyticsScripts />

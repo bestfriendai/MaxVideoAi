@@ -20,6 +20,9 @@ export function getDb() {
 }
 
 export async function query<TRecord = unknown>(text: string, params?: ReadonlyArray<unknown>) {
+  if (!isDatabaseConfigured()) {
+    return [] as TRecord[];
+  }
   const client = await getDb().connect();
   try {
     const res = await client.query<TRecord>(text, params);

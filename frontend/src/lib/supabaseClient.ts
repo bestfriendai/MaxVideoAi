@@ -1,38 +1,70 @@
 'use client';
 
-import { createBrowserClient } from '@supabase/ssr';
+// This file is deprecated - use firebase-auth.ts instead
+// Keeping for backward compatibility during migration
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+import { auth } from '@/lib/firebase-client';
+import { onAuthStateChanged, type User } from 'firebase/auth';
+import { getIdToken, getCurrentUserId, signOut as firebaseSignOut } from '@/lib/firebase-auth';
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Missing Supabase env vars: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
-}
+// Re-export Firebase auth for backward compatibility
+export const supabase = {
+  auth: {
+    getSession: async () => {
+      const user = auth.currentUser;
+      if (user) {
+        const token = await getIdToken();
+        return {
+          data: {
+            session: {
+              user: { id: user.uid, email: user.email },
+              access_token: token,
+            },
+          },
+          error: null,
+        };
+      }
+      return { data: { session: null }, error: null };
+    },
 
-function resolveCookieDomain(): string | undefined {
-  const explicit = process.env.NEXT_PUBLIC_COOKIE_DOMAIN?.trim() || process.env.COOKIE_DOMAIN?.trim();
-  if (explicit) {
-    if (explicit.includes('localhost') || explicit.includes('127.0.0.1')) return undefined;
-    return explicit;
-  }
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || '';
-  if (siteUrl.includes('maxvideoai.com')) {
-    return 'maxvideoai.com';
-  }
-  return undefined;
-}
+    getUser: async () => {
+      const user = auth.currentUser;
+      if (user) {
+        return {
+          data: {
+            user: {
+              id: user.uid,
+              email: user.email,
+            },
+          },
+          error: null,
+        };
+      }
+      return { data: { user: null }, error: { message: 'No user' } };
+    },
 
-const cookieDomain = resolveCookieDomain();
-const cookieOptions = {
-  ...(cookieDomain ? { domain: cookieDomain } : {}),
-  path: '/',
-  sameSite: 'lax' as const,
-  secure: process.env.NODE_ENV === 'production',
+    signOut: async () => {
+      await firebaseSignOut();
+      return { error: null };
+    },
+
+    onAuthStateChange: (callback: (event: string, session: { user: { id: string; email: string | null }; access_token: string | null } | null) => void) => {
+      // Use Firebase's onAuthStateChanged
+      const unsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
+        if (user) {
+          const token = await user.getIdToken().catch(() => null);
+          callback('SIGNED_IN', {
+            user: { id: user.uid, email: user.email },
+            access_token: token,
+          });
+        } else {
+          callback('SIGNED_OUT', null);
+        }
+      });
+      return { data: { subscription: { unsubscribe } } };
+    },
+  },
 };
 
-export const supabase = createBrowserClient(supabaseUrl, supabaseKey, {
-  cookieOptions,
-  auth: {
-    detectSessionInUrl: false,
-  },
-});
+// Export utilities
+export { getIdToken, getCurrentUserId };

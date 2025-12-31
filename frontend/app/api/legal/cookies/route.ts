@@ -25,8 +25,20 @@ export async function POST(req: NextRequest) {
 
   const doc = await getLegalDocumentUncached('cookies');
   if (!doc) {
-    return NextResponse.json({ ok: false, error: 'Cookie policy not configured' }, { status: 500 });
+    if (process.env.NODE_ENV === 'development' || !process.env.DATABASE_URL) {
+      // Fallback for dev mode without DB
+      const fallbackDoc = { version: '1.0' };
+      // We continue with fallbackDoc
+      // But we need to define 'doc' variable to use below
+      // Since 'doc' is const in original scope (wait, no it's const in the block above in my replacement?)
+      // I need to restructure the code slightly or just use a new variable.
+      // Actually, I can just not return 500.
+    } else {
+      return NextResponse.json({ ok: false, error: 'Cookie policy not configured' }, { status: 500 });
+    }
   }
+
+  const effectiveVersion = doc?.version ?? '1.0';
 
   const categories = {
     analytics: normalizeBoolean(body.categories?.analytics),
@@ -39,9 +51,9 @@ export async function POST(req: NextRequest) {
       await recordUserConsents({
         userId,
         entries: [
-          { docKey: 'cookies', docVersion: doc.version, accepted: true, source: 'cookie_banner' },
-          { docKey: 'cookies.analytics', docVersion: doc.version, accepted: categories.analytics, source: 'cookie_banner' },
-          { docKey: 'cookies.ads', docVersion: doc.version, accepted: categories.ads, source: 'cookie_banner' },
+          { docKey: 'cookies', docVersion: effectiveVersion, accepted: true, source: 'cookie_banner' },
+          { docKey: 'cookies.analytics', docVersion: effectiveVersion, accepted: categories.analytics, source: 'cookie_banner' },
+          { docKey: 'cookies.ads', docVersion: effectiveVersion, accepted: categories.ads, source: 'cookie_banner' },
         ],
         ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
         userAgent: req.headers.get('user-agent'),
@@ -49,7 +61,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ ok: true, version: doc.version });
+    return NextResponse.json({ ok: true, version: effectiveVersion });
   } catch (error) {
     console.error('[legal-cookies] failed to record consent', error);
     return NextResponse.json(

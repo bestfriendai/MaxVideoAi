@@ -13,7 +13,7 @@ export function withMemoization<P extends object>(
 ): ComponentType<P> {
   const MemoizedComponent = memo(Component, propsAreEqual);
   MemoizedComponent.displayName = `Memoized(${Component.displayName || Component.name || 'Component'})`;
-  return MemoizedComponent;
+  return MemoizedComponent as unknown as ComponentType<P>;
 }
 
 /**

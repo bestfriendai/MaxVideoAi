@@ -1,14 +1,11 @@
 import type { NextRequest } from 'next/server';
-import { createSupabaseRouteClient } from '@/lib/supabase-ssr';
+import { getRouteAuthContext } from '@/lib/supabase-ssr';
 
-export async function getUserIdFromRequest(_req?: NextRequest): Promise<string | null> {
-  void _req;
+export async function getUserIdFromRequest(req?: NextRequest): Promise<string | null> {
+  if (!req) return null;
   try {
-    const supabase = createSupabaseRouteClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    return user?.id ?? null;
+    const { userId } = await getRouteAuthContext(req);
+    return userId;
   } catch {
     return null;
   }

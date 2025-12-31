@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useEngines, useInfiniteJobs, runPreflight, runGenerate, getJobStatus } from '@/lib/api';
 import { authFetch } from '@/lib/authFetch';
-import { supabase } from '@/lib/supabaseClient';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import type { EngineCaps, EngineInputField, Mode, PreflightRequest, PreflightResponse } from '@/types/engines';
@@ -934,7 +933,7 @@ export default function Page() {
   const { data, error: enginesError, isLoading } = useEngines();
   const engines = useMemo(() => data?.engines ?? [], [data]);
   const { data: latestJobsPages, mutate: mutateLatestJobs } = useInfiniteJobs(24, { type: 'video' });
-  const { user, loading: authLoading, authStatus } = useRequireAuth();
+  const { user, loading: authLoading, authStatus, getIdToken } = useRequireAuth();
   const engineIdByLabel = useMemo(() => {
     const map = new Map<string, string>();
     engines.forEach((engine) => {
@@ -1079,14 +1078,6 @@ const requestedEngineToken = useMemo(
   () => normalizeEngineToken(resolvedRequestedEngineId),
   [resolvedRequestedEngineId]
 );
-if (typeof window !== 'undefined') {
-  console.log('[generate] requested engine params', {
-    raw: requestedEngineId,
-    resolved: resolvedRequestedEngineId,
-    token: requestedEngineToken,
-    search: searchParams?.toString() ?? '',
-  });
-}
 const searchString = useMemo(() => searchParams?.toString() ?? '', [searchParams]);
 const skipOnboardingRef = useRef<boolean>(false);
 const hydratedJobRef = useRef<string | null>(null);
@@ -3459,8 +3450,7 @@ const handleRefreshJob = useCallback(async (jobId: string) => {
       });
     }
 
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token ?? null;
+    const token = await getIdToken();
     const paymentMode: 'wallet' | 'platform' = token ? 'wallet' : 'platform';
     const currencyCode = preflight?.pricing?.currency ?? preflight?.currency ?? 'USD';
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/server/admin';
-import { getSupabaseAdmin } from '@/server/supabase-admin';
+import { getFirebaseAuth, isFirebaseAdminConfigured } from '@/server/firebase-admin';
 
 export const runtime = 'nodejs';
 
@@ -12,12 +12,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (!isFirebaseAdminConfigured()) {
     return NextResponse.json(
       {
         ok: false,
-        error: 'SERVICE_ROLE_NOT_CONFIGURED',
-        message: 'Supabase service role key is not set. Add SUPABASE_SERVICE_ROLE_KEY to enable admin user listing.',
+        error: 'FIREBASE_ADMIN_NOT_CONFIGURED',
+        message: 'Firebase Admin SDK is not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY.',
       },
       { status: 200 }
     );
@@ -25,41 +25,47 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url);
   const search = (url.searchParams.get('search') ?? '').toLowerCase();
-  const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'));
   const perPage = Math.min(200, Math.max(1, Number(url.searchParams.get('perPage') ?? '25')));
 
-  const admin = getSupabaseAdmin();
-  const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  try {
+    const auth = getFirebaseAuth();
+    const result = await auth.listUsers(perPage);
+
+    const users = result.users.filter((user) => {
+      if (!search) return true;
+      const email = (user.email ?? '').toLowerCase();
+      const id = (user.uid ?? '').toLowerCase();
+      return email.includes(search) || id.includes(search);
+    });
+
+    const payload = users.map((user) => ({
+      id: user.uid,
+      email: user.email,
+      createdAt: user.metadata.creationTime,
+      lastSignInAt: user.metadata.lastSignInTime,
+      appMetadata: user.customClaims ?? {},
+      userMetadata: {
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+      },
+      factors: user.multiFactor?.enrolledFactors?.length ?? 0,
+    }));
+
+    const hasMore = result.pageToken !== undefined;
+
+    return NextResponse.json({
+      ok: true,
+      users: payload,
+      pagination: {
+        perPage,
+        nextPageToken: result.pageToken ?? null,
+        hasMore,
+      },
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { ok: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
   }
-
-  const users = (data?.users ?? []).filter((user) => {
-    if (!search) return true;
-    const email = (user.email ?? '').toLowerCase();
-    const id = (user.id ?? '').toLowerCase();
-    return email.includes(search) || id.includes(search);
-  });
-
-  const payload = users.map((user) => ({
-    id: user.id,
-    email: user.email,
-    createdAt: user.created_at,
-    lastSignInAt: user.last_sign_in_at,
-    appMetadata: user.app_metadata,
-    userMetadata: user.user_metadata,
-    factors: user.factors?.length ?? 0,
-  }));
-
-  const hasMore = (data?.users?.length ?? 0) === perPage;
-
-  return NextResponse.json({
-    ok: true,
-    users: payload,
-    pagination: {
-      page,
-      perPage,
-      nextPage: hasMore ? page + 1 : null,
-    },
-  });
 }
