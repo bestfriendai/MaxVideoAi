@@ -105,13 +105,20 @@ async function getJobFromPostgres(jobId: string, userId: string) {
   }
 }
 
-async function getJobFromFirestore(jobId: string, userId: string) {
+async function getJobFromFirestore(jobId: string, userId: string, allowPublic = false) {
   if (!isFirestoreConfigured()) {
     return null;
   }
 
   try {
-    const job = await getJobById(jobId, userId);
+    // First try with user ownership check
+    let job = await getJobById(jobId, userId);
+
+    // If not found and allowPublic, try without userId filter for demo/public jobs
+    if (!job && allowPublic) {
+      job = await getJobById(jobId);
+    }
+
     if (!job) {
       return null;
     }
@@ -185,7 +192,8 @@ export async function GET(_req: NextRequest, { params }: { params: { jobId: stri
 
     // Fall back to Firestore (for image jobs)
     if (!job) {
-      job = await getJobFromFirestore(jobId, userId);
+      // Allow public/demo jobs to be fetched without strict ownership
+      job = await getJobFromFirestore(jobId, userId, true);
     }
 
     if (!job) {
