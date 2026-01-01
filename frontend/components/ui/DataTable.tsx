@@ -13,12 +13,9 @@ import {
   Filter,
   Download,
   MoreHorizontal,
-  Check,
-  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from './Button';
-import { Input } from './Input';
 import { Skeleton } from './Skeleton';
 
 // Column definition

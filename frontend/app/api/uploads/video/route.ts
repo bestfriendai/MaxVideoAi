@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
       height: null,
       size: buffer.length,
       source: 'upload',
+      storageKey: uploadResult.key,
       metadata: { originalName: blob.name, kind: 'video' },
     });
 

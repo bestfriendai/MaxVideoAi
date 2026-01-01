@@ -1038,6 +1038,7 @@ export async function POST(req: NextRequest) {
           height: uploadResult.height,
           size: uploadResult.size,
           source: 'inline',
+          storageKey: uploadResult.key,
           metadata: { originalName: base.name },
         });
 
@@ -1383,6 +1384,17 @@ export async function POST(req: NextRequest) {
       })) ?? [],
   };
 
+  logMetric('accepted', {
+    jobId,
+    durationMs: Date.now() - requestStartedAt,
+    meta: { 
+      paymentMode, 
+      inputSummary: falInputSummary,
+      settlementAmountCents,
+      settlementFxRate
+    },
+  });
+
   const falDurationOption = lumaDurationInfo?.label ?? rawDurationLabel ?? rawDurationOption ?? null;
   const isLtx2FastLong = engine.id === 'ltx-2-fast' && durationSec > 10;
   let clampedFps =
@@ -1582,11 +1594,6 @@ export async function POST(req: NextRequest) {
       ]
     );
     jobInserted = true;
-    logMetric('accepted', {
-      jobId,
-      durationMs: Date.now() - requestStartedAt,
-      meta: { paymentMode, inputSummary: falInputSummary },
-    });
   } catch (error) {
     console.error('[api/generate] failed to persist provisional job record', error);
     logMetric('failed', {

@@ -26,10 +26,6 @@ import {
   CreditCard,
   HelpCircle,
   Keyboard,
-  Moon,
-  Sun,
-  LogOut,
-  User,
   Plus,
   Sparkles,
   type LucideIcon,
@@ -206,6 +202,21 @@ const CommandPaletteModal = memo(function CommandPaletteModal({
     }
   }, [isOpen]);
 
+  const executeCommand = useCallback(
+    (item: CommandItem) => {
+      if (item.disabled) return;
+
+      if (item.action) {
+        item.action();
+      } else if (item.href) {
+        router.push(item.href);
+      }
+
+      onClose();
+    },
+    [router, onClose]
+  );
+
   // Keyboard navigation
   useEffect(() => {
     if (!isOpen) return;
@@ -235,7 +246,7 @@ const CommandPaletteModal = memo(function CommandPaletteModal({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, flatItems, selectedIndex, onClose]);
+  }, [isOpen, flatItems, selectedIndex, onClose, executeCommand]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -247,21 +258,6 @@ const CommandPaletteModal = memo(function CommandPaletteModal({
       selected.scrollIntoView({ block: 'nearest' });
     }
   }, [selectedIndex]);
-
-  const executeCommand = useCallback(
-    (item: CommandItem) => {
-      if (item.disabled) return;
-
-      if (item.action) {
-        item.action();
-      } else if (item.href) {
-        router.push(item.href);
-      }
-
-      onClose();
-    },
-    [router, onClose]
-  );
 
   if (!mounted) return null;
 

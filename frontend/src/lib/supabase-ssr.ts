@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { verifyIdToken } from '@/server/firebase-admin';
 
 // Firebase Server Auth - Replaces Supabase SSR
@@ -37,7 +37,7 @@ export async function getRouteAuthContext(req: NextRequest): Promise<AuthContext
 /**
  * Middleware session update - extracts user from Firebase token
  */
-export async function updateSession(req: NextRequest, _res: NextResponse) {
+export async function updateSession(req: NextRequest) {
   const authHeader = req.headers.get('Authorization');
   let userId: string | null = null;
 
@@ -82,7 +82,7 @@ export function createSupabaseServerClient() {
 /**
  * @deprecated Use getRouteAuthContext instead
  */
-export function createSupabaseMiddlewareClient(_req: NextRequest, _res: NextResponse) {
+export function createSupabaseMiddlewareClient() {
   console.warn('[DEPRECATED] createSupabaseMiddlewareClient is deprecated.');
   return createSupabaseRouteClient();
 }

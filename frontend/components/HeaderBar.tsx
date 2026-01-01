@@ -66,13 +66,17 @@ export function HeaderBar() {
   const showServiceNotice = Boolean(bannerMessage);
   useEffect(() => {
     let mounted = true;
+    const controller = new AbortController();
+    const FETCH_TIMEOUT_MS = 10000;
     const fetchAccountState = async (token?: string | null, userId?: string | null) => {
       const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
       try {
         const [walletRes, memberRes] = await Promise.all([
-          fetch('/api/wallet', { headers, cache: 'no-store' }),
-          fetch('/api/member-status', { headers, cache: 'no-store' }),
+          fetch('/api/wallet', { headers, cache: 'no-store', signal: controller.signal }),
+          fetch('/api/member-status', { headers, cache: 'no-store', signal: controller.signal }),
         ]);
+        clearTimeout(timeoutId);
         const walletJson = await walletRes.json().catch(() => null);
         const memberJson = await memberRes.json().catch(() => null);
         if (!mounted) return;
@@ -153,6 +157,7 @@ export function HeaderBar() {
     window.addEventListener('wallet:invalidate', handleInvalidate);
     return () => {
       mounted = false;
+      controller.abort();
       sub.subscription.unsubscribe();
       window.removeEventListener('wallet:invalidate', handleInvalidate);
     };

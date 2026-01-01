@@ -10,7 +10,6 @@ import {
   Image,
   FolderOpen,
   Clock,
-  Settings,
   Menu,
   Plus,
   type LucideIcon,

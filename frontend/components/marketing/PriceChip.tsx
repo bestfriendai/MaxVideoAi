@@ -97,7 +97,7 @@ export function PriceChip({
   return (
     <div className="relative inline-flex">
       <span className="inline-flex items-center gap-2 rounded-pill border border-accent/30 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-micro text-accent shadow-card">
-        <span>{`${prefix} ${formattedTotal}`}</span>
+        <span suppressHydrationWarning>{`${prefix} ${formattedTotal}`}</span>
         <span className="text-text-muted">{chipSuffix}</span>
         <button
           type="button"
@@ -143,7 +143,7 @@ export function PriceChip({
               <span className="text-[11px] font-semibold uppercase tracking-micro text-text-muted">
                 {t('pricing.totalBeforeFees', 'Total (before taxes/fees)')}
               </span>
-              <p className="text-sm font-semibold text-text-primary">{formattedTotal}</p>
+              <p className="text-sm font-semibold text-text-primary" suppressHydrationWarning>{formattedTotal}</p>
             </div>
           </div>
         </div>

@@ -279,7 +279,7 @@ export const useGenerationStore = create<GenerationState>()(
       retryJob: (id) => {
         const job = get().getJobById(id);
         if (job) {
-          set((state) => ({
+          set(() => ({
             settings: job.settings,
             inputImage: job.inputImage,
             inputVideo: job.inputVideo,

@@ -30,7 +30,6 @@ export interface FormState<T extends Record<string, unknown>> {
   isValid: boolean;
   isDirty: boolean;
   isSubmitting: boolean;
-  submitCount: number;
 }
 
 // Hook options
@@ -90,7 +89,6 @@ export function useForm<T extends Record<string, unknown>>({
   const [errors, setErrors] = useState<Partial<Record<keyof T, string>>>({});
   const [touched, setTouchedState] = useState<Partial<Record<keyof T, boolean>>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitCount, setSubmitCount] = useState(0);
 
   // Validate a single field
   const validateField = useCallback(
@@ -214,7 +212,6 @@ export function useForm<T extends Record<string, unknown>>({
   const handleSubmit = useCallback(
     async (e?: FormEvent) => {
       e?.preventDefault();
-      setSubmitCount((c) => c + 1);
 
       // Touch all fields
       const allTouched = Object.keys(values).reduce(

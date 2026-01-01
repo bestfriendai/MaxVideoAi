@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureAssetSchema } from '@/lib/schema';
-import { query } from '@/lib/db';
+import { isDatabaseConfigured, query } from '@/lib/db';
 import { deleteUserAsset, uploadImageToStorage, recordUserAsset } from '@/server/storage';
 import { getRouteAuthContext } from '@/lib/supabase-ssr';
+import { getDb as getFirestoreDb, isFirestoreConfigured } from '@/lib/firestore-db';
 
 export const runtime = 'nodejs';
 
@@ -12,11 +13,79 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 });
   }
 
-  await ensureAssetSchema();
-
   const limit = Math.min(200, Number(req.nextUrl.searchParams.get('limit') ?? 50));
   const source = (req.nextUrl.searchParams.get('source') ?? '').trim() || null;
   const originUrl = (req.nextUrl.searchParams.get('originUrl') ?? '').trim() || null;
+
+  if (!isDatabaseConfigured() && isFirestoreConfigured()) {
+    const db = getFirestoreDb();
+    let queryRef = db.collection('userAssets').where('userId', '==', userId);
+    if (source) {
+      queryRef = queryRef.where('source', '==', source);
+    }
+    if (originUrl) {
+      queryRef = queryRef.where('metadata.originUrl', '==', originUrl);
+    }
+    queryRef = queryRef.orderBy('createdAt', 'desc').limit(limit);
+
+    let snapshot;
+    let shouldFilter = false;
+    try {
+      snapshot = await queryRef.get();
+    } catch (error) {
+      console.warn('[user-assets] Firestore query failed, falling back to in-memory filtering', error);
+      shouldFilter = Boolean(source || originUrl);
+      const fallbackLimit = Math.min(200, Math.max(limit * 3, limit));
+      snapshot = await db
+        .collection('userAssets')
+        .where('userId', '==', userId)
+        .orderBy('createdAt', 'desc')
+        .limit(fallbackLimit)
+        .get();
+    }
+
+    const assets = snapshot.docs
+      .map((doc) => {
+        const data = doc.data() as Record<string, unknown>;
+        const createdAtRaw = data.createdAt;
+        const createdAt =
+          createdAtRaw instanceof Date
+            ? createdAtRaw.toISOString()
+            : createdAtRaw && typeof (createdAtRaw as { toDate?: () => Date }).toDate === 'function'
+              ? (createdAtRaw as { toDate: () => Date }).toDate().toISOString()
+              : typeof createdAtRaw === 'string'
+                ? createdAtRaw
+                : null;
+        const metadata =
+          data.metadata && typeof data.metadata === 'object' ? (data.metadata as Record<string, unknown>) : null;
+        return {
+          id: doc.id,
+          url: typeof data.url === 'string' ? data.url : '',
+          mime: typeof data.mimeType === 'string' ? data.mimeType : (data.mime as string | null),
+          width: typeof data.width === 'number' ? data.width : null,
+          height: typeof data.height === 'number' ? data.height : null,
+          size: typeof data.sizeBytes === 'number' ? data.sizeBytes : null,
+          source: typeof data.source === 'string' ? data.source : null,
+          jobId: metadata && typeof metadata.jobId === 'string' ? metadata.jobId : null,
+          createdAt,
+          originUrl: metadata && typeof metadata.originUrl === 'string' ? metadata.originUrl : null,
+        };
+      })
+      .filter((asset) => asset.url);
+
+    const filtered = shouldFilter
+      ? assets.filter((asset) => {
+          if (source && asset.source !== source) return false;
+          if (originUrl && asset.originUrl !== originUrl) return false;
+          return true;
+        })
+      : assets;
+
+    return NextResponse.json({ ok: true, assets: filtered.slice(0, limit) });
+  }
+
+  await ensureAssetSchema();
+
   const rows = await query<{
     asset_id: string;
     url: string;
@@ -158,6 +227,7 @@ export async function POST(req: NextRequest) {
       height: upload.height,
       size: upload.size,
       source: 'generated',
+      storageKey: upload.key,
       metadata: {
         originUrl: sourceUrl,
         jobId: payload?.jobId ?? null,

@@ -195,7 +195,7 @@ export function PageErrorBoundary({ children }: { children: ReactNode }) {
   return (
     <ErrorBoundary
       showDetails={process.env.NODE_ENV === 'development'}
-      onError={(error, errorInfo) => {
+      onError={() => {
         // In production, you would send this to an error tracking service
         if (process.env.NODE_ENV === 'production') {
           // sendToErrorTracking(error, errorInfo);

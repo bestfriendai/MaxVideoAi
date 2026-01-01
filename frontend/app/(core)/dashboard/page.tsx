@@ -187,6 +187,12 @@ export default function DashboardPage() {
   const [selectedImageMode, setSelectedImageMode] = useState<Mode>('t2i');
   const [hasStoredImageForm, setHasStoredImageForm] = useState(false);
   const [imageSelectionResolved, setImageSelectionResolved] = useState(false);
+
+  // Use ref for mutate to avoid polling interval recreation
+  const mutateJobsRef = useRef(mutateJobs);
+  useEffect(() => {
+    mutateJobsRef.current = mutateJobs;
+  }, [mutateJobs]);
   const [exportsSummary, setExportsSummary] = useState<{ total: number } | null>(null);
   const [templates, setTemplates] = useState<TemplateEntry[]>([]);
   const [walletSummary, setWalletSummary] = useState<{ balance: number; currency: string } | null>(() => {
@@ -428,10 +434,10 @@ export default function DashboardPage() {
   useEffect(() => {
     if (pendingJobs.length === 0) return;
     const interval = window.setInterval(() => {
-      void mutateJobs();
+      void mutateJobsRef.current();
     }, IN_PROGRESS_POLL_MS);
     return () => window.clearInterval(interval);
-  }, [mutateJobs, pendingJobs.length]);
+  }, [pendingJobs.length]);
 
   const selectedEngine = useMemo(() => {
     if (!selectedEngineId) return availableEngines[0] ?? enginesData?.engines?.[0] ?? null;
@@ -734,6 +740,7 @@ export default function DashboardPage() {
                 hasStoredImageForm={hasStoredImageForm}
                 canStartVideo={canStart}
                 canStartImage={canStartImage}
+                enginesError={enginesError}
                 onVideoModeChange={handleVideoModeChange}
                 onVideoEngineChange={handleVideoEngineChange}
                 onImageModeChange={handleImageModeChange}
@@ -860,6 +867,7 @@ function CreateHero({
   hasStoredImageForm,
   canStartVideo,
   canStartImage,
+  enginesError,
   onVideoModeChange,
   onVideoEngineChange,
   onImageModeChange,
@@ -880,6 +888,7 @@ function CreateHero({
   hasStoredImageForm: boolean;
   canStartVideo: boolean;
   canStartImage: boolean;
+  enginesError: Error | undefined;
   onVideoModeChange: (mode: Mode) => void;
   onVideoEngineChange: (engineId: string) => void;
   onImageModeChange: (mode: Mode) => void;
@@ -897,6 +906,12 @@ function CreateHero({
           <p className="mt-1 text-sm text-text-secondary">{copy.create.subtitle}</p>
         </div>
       </div>
+
+      {enginesError && (
+        <div className="mt-4 rounded-input border border-state-error/40 bg-state-error/10 px-4 py-3 text-sm text-state-error">
+          Unable to load engines. Please refresh the page.
+        </div>
+      )}
 
       <div className="mt-5 grid gap-6 lg:grid-cols-2">
         <CreateVideoCard

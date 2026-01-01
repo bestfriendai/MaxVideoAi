@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
       height: uploadResult.height,
       size: uploadResult.size,
       source: 'upload',
+      storageKey: uploadResult.key,
       metadata: { originalName: blob.name },
     });
 

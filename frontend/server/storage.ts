@@ -1,8 +1,22 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
+import { resolve4 } from 'node:dns/promises';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+function isPrivateIP(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  return (
+    parts[0] === 10 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    parts[0] === 127 ||
+    parts[0] === 0
+  );
+}
 import { uploadToFirebaseStorageServer, isFirebaseStorageConfigured, deleteFromFirebaseStorageServer } from '@/lib/firebase-storage';
-import { getDb, isFirestoreConfigured } from '@/lib/firestore-db';
+import { getDb as getFirestoreDb, isFirestoreConfigured } from '@/lib/firestore-db';
+import { isDatabaseConfigured, query } from '@/lib/db';
+import { ensureAssetSchema } from '@/lib/schema';
 
 export type UploadResult = {
   url: string;
@@ -277,7 +291,7 @@ export async function deleteUserAsset(params: { assetId: string; userId: string 
   // Use Firestore if configured
   if (isFirestoreConfigured()) {
     try {
-      const db = getDb();
+      const db = getFirestoreDb();
       const docRef = db.collection('userAssets').doc(assetId);
       const doc = await docRef.get();
 
@@ -308,6 +322,57 @@ export async function deleteUserAsset(params: { assetId: string; userId: string 
     }
   }
 
+  if (isDatabaseConfigured()) {
+    try {
+      await ensureAssetSchema();
+      const rows = await query<{ url: string; metadata: unknown }>(
+        `SELECT url, metadata
+         FROM user_assets
+         WHERE asset_id = $1 AND user_id = $2
+         LIMIT 1`,
+        [assetId, userId]
+      );
+
+      if (!rows.length) {
+        return 'not_found';
+      }
+
+      await query(`DELETE FROM user_assets WHERE asset_id = $1 AND user_id = $2`, [assetId, userId]);
+
+      const metadata = rows[0].metadata;
+      const storageKey =
+        metadata &&
+        typeof metadata === 'object' &&
+        'storageKey' in (metadata as Record<string, unknown>) &&
+        typeof (metadata as Record<string, unknown>).storageKey === 'string'
+          ? ((metadata as Record<string, unknown>).storageKey as string)
+          : null;
+
+      if (storageKey && isFirebaseStorageConfigured()) {
+        try {
+          await deleteFromFirebaseStorageServer(storageKey);
+        } catch (error) {
+          console.error('[storage] failed to delete from Firebase Storage', error);
+        }
+      }
+
+      const storageKeyFromUrl = extractStorageKeyFromUrl(rows[0].url);
+      const s3Key = storageKey || storageKeyFromUrl;
+      if (s3Key) {
+        try {
+          await deleteObjectFromStorage(s3Key);
+        } catch (error) {
+          console.error('[storage] failed to delete from S3', error);
+        }
+      }
+
+      return 'deleted';
+    } catch (error) {
+      console.error('[storage] database delete failed', error);
+      return 'not_found';
+    }
+  }
+
   return 'not_found';
 }
 
@@ -328,9 +393,27 @@ export async function probeImageUrl(
   { timeoutMs = 3500 }: { timeoutMs?: number } = {}
 ): Promise<{ ok: boolean; mime?: string; size?: number }> {
   try {
+    const urlObj = new URL(url);
+    if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+      return { ok: false };
+    }
+
+    try {
+      const ips = await resolve4(urlObj.hostname);
+      if (ips.some(isPrivateIP)) {
+        return { ok: false };
+      }
+    } catch {
+      return { ok: false };
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
+    const response = await fetch(url, { 
+      method: 'HEAD', 
+      signal: controller.signal,
+      redirect: 'error'
+    });
     clearTimeout(timer);
     if (!response.ok) {
       return { ok: false };
@@ -357,11 +440,15 @@ export async function recordUserAsset(params: {
   storageKey?: string;
 }) {
   const { assetId = randomUUID(), userId, url, mime, width, height, size, source, metadata, storageKey } = params;
+  const mergedMetadata = {
+    ...(metadata ?? {}),
+    ...(storageKey ? { storageKey } : {}),
+  };
 
   // Use Firestore if configured
   if (isFirestoreConfigured()) {
     try {
-      const db = getDb();
+      const db = getFirestoreDb();
       await db.collection('userAssets').doc(assetId).set({
         assetId,
         userId: userId ?? null,
@@ -371,13 +458,45 @@ export async function recordUserAsset(params: {
         height,
         sizeBytes: size ?? null,
         source,
-        metadata: metadata ?? null,
+        metadata: Object.keys(mergedMetadata).length ? mergedMetadata : null,
         storageKey: storageKey ?? null,
         createdAt: new Date(),
       });
       return assetId;
     } catch (error) {
       console.error('[storage] Firestore recordUserAsset failed', error);
+    }
+  }
+
+  if (isDatabaseConfigured()) {
+    try {
+      await ensureAssetSchema();
+      await query(
+        `INSERT INTO user_assets (asset_id, user_id, url, mime_type, width, height, size_bytes, source, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (asset_id)
+         DO UPDATE SET
+           url = EXCLUDED.url,
+           mime_type = EXCLUDED.mime_type,
+           width = EXCLUDED.width,
+           height = EXCLUDED.height,
+           size_bytes = EXCLUDED.size_bytes,
+           source = EXCLUDED.source,
+           metadata = EXCLUDED.metadata`,
+        [
+          assetId,
+          userId ?? null,
+          url,
+          mime,
+          width,
+          height,
+          size ?? null,
+          source,
+          Object.keys(mergedMetadata).length ? mergedMetadata : null,
+        ]
+      );
+    } catch (error) {
+      console.error('[storage] database recordUserAsset failed', error);
     }
   }
 

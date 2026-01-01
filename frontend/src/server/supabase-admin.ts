@@ -50,7 +50,7 @@ export function getSupabaseAdmin() {
             };
           }
         },
-        listUsers: async ({ page = 1, perPage = 100 }: { page?: number; perPage?: number } = {}) => {
+        listUsers: async ({ perPage = 100 }: { page?: number; perPage?: number } = {}) => {
           if (!isConfigured()) {
             return { data: { users: [] }, error: { message: 'Firebase Admin not configured' } };
           }

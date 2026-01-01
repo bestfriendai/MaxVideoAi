@@ -69,8 +69,15 @@ export async function GET(req: NextRequest) {
       const url = new URL(req.url);
       const limit = url.searchParams.get('limit');
       const cursor = url.searchParams.get('cursor');
+      const type = url.searchParams.get('type');
       const authHeader = req.headers.get('Authorization');
-      const data = await fetchFromFirebase('jobs', {
+      
+      const queryParams = new URLSearchParams();
+      if (limit) queryParams.set('limit', limit);
+      if (cursor) queryParams.set('cursor', cursor);
+      if (type) queryParams.set('type', type);
+
+      const data = await fetchFromFirebase(`jobs?${queryParams.toString()}`, {
         method: 'GET',
         headers: authHeader ? { 'Authorization': authHeader } : undefined,
       });

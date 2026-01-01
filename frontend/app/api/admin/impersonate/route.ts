@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
   let targetUser;
   try {
     targetUser = await auth.getUser(targetUserId);
-  } catch (error) {
+  } catch {
     return NextResponse.json({ ok: false, error: 'User not found' }, { status: 404 });
   }
 

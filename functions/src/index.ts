@@ -1,6 +1,6 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
-const cors = require("cors")({ origin: true });
+import cors from "cors";
 
 // Initialize admin if not already initialized
 if (admin.apps.length === 0) {
@@ -8,235 +8,281 @@ if (admin.apps.length === 0) {
 }
 
 const db = admin.firestore();
+const corsHandler = cors({ origin: true });
 
-export const engines = functions.https.onRequest((req, res) => {
-  return cors(req, res, async () => {
+// Helper to verify Firebase Auth token from Authorization header
+async function verifyAuthToken(req: functions.https.Request): Promise<string | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.substring(7);
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    return decoded.uid;
+  } catch {
+    return null;
+  }
+}
+
+// Helper wrapper for CORS handling
+function withCors(
+  handler: (req: functions.https.Request, res: functions.Response) => Promise<void>
+) {
+  return (req: functions.https.Request, res: functions.Response) => {
+    corsHandler(req, res, async () => {
+      try {
+        await handler(req, res);
+      } catch (error) {
+        console.error("Unhandled error:", error);
+        res.status(500).json({ ok: false, error: { code: "INTERNAL_ERROR" } });
+      }
+    });
+  };
+}
+
+export const engines = functions.https.onRequest(
+  withCors(async (req, res) => {
     if (req.method !== "GET") {
       res.status(405).json({ ok: false, error: { code: "METHOD_NOT_ALLOWED" } });
       return;
     }
 
-    try {
-      const snapshot = await db.collection("engines").get();
-      const enginesList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+    const snapshot = await db.collection("engines").get();
+    const enginesList = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
 
-      res.status(200).json({ engines: enginesList });
-    } catch (error) {
-      console.error("Error loading engines:", error);
-      res.status(500).json({ ok: false, error: { code: "INTERNAL_ERROR" } });
-    }
-  });
-});
+    res.status(200).json({ engines: enginesList });
+  })
+);
 
-export const preflight = functions.https.onRequest((req, res) => {
-  return cors(req, res, async () => {
+export const preflight = functions.https.onRequest(
+  withCors(async (req, res) => {
     if (req.method !== "POST") {
       res.status(405).json({ ok: false, error: { code: "METHOD_NOT_ALLOWED" } });
       return;
     }
 
-    try {
-      const body = req.body;
-      const engineId = body.engineId || body.engine;
+    const body = req.body as Record<string, unknown>;
+    const engineId = (body.engineId || body.engine) as string | undefined;
 
-      if (!engineId) {
-        res.status(400).json({ ok: false, error: { code: "MISSING_ENGINE" } });
-        return;
-      }
+    if (!engineId) {
+      res.status(400).json({ ok: false, error: { code: "MISSING_ENGINE" } });
+      return;
+    }
 
-      const engineDoc = await db.collection("engines").doc(engineId).get();
-      const engine: any = engineDoc.data();
+    const engineDoc = await db.collection("engines").doc(engineId).get();
+    const engine = engineDoc.data() as Record<string, unknown> | undefined;
 
-      if (!engine) {
-        res.status(404).json({
-          ok: false,
-          error: {
-            code: "UNKNOWN_ENGINE",
-            message: `Engine ${engineId} is not available.`,
-          },
-        });
-        return;
-      }
+    if (!engine) {
+      res.status(404).json({
+        ok: false,
+        error: {
+          code: "UNKNOWN_ENGINE",
+          message: `Engine ${engineId} is not available.`,
+        },
+      });
+      return;
+    }
 
-      // Simple pricing logic for demo - in production this would be more complex
-      const rate = engine.pricing?.base || 0.05;
-      const durationSec = body.durationSec || 5;
-      const total = rate * durationSec;
+    // Simple pricing logic for demo - in production this would be more complex
+    const pricing = engine.pricing as Record<string, number> | undefined;
+    const rate = pricing?.base || 0.05;
+    const durationSec = (body.durationSec as number) || 5;
+    const total = rate * durationSec;
 
-      res.status(200).json({
-        ok: true,
+    res.status(200).json({
+      ok: true,
+      currency: "USD",
+      itemization: {
+        base: {
+          unit: "USD/s",
+          rate: rate,
+          seconds: durationSec,
+          subtotal: total,
+        },
+        addons: [],
+        discounts: [],
+        taxes: [],
+      },
+      total: total,
+      caps: {
+        maxDurationSec: (engine.maxDurationSec as number) || 60,
+        supportedFps: (engine.fps as number[]) || [24, 30],
+      },
+      ttlSec: 120,
+    });
+  })
+);
+
+export const generate = functions.https.onRequest(
+  withCors(async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, error: { code: "METHOD_NOT_ALLOWED" } });
+      return;
+    }
+
+    // Verify authentication
+    const userId = await verifyAuthToken(req);
+    if (!userId) {
+      res.status(401).json({ ok: false, error: { code: "UNAUTHORIZED" } });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown>;
+    const engineId = (body.engineId || body.engine) as string | undefined;
+
+    if (!engineId) {
+      res.status(400).json({ ok: false, error: { code: "MISSING_ENGINE" } });
+      return;
+    }
+
+    const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    const durationSec = (body.durationSec as number) || 5;
+
+    const jobData = {
+      jobId,
+      userId,
+      engineId,
+      status: "pending",
+      prompt: (body.prompt as string) || "",
+      aspectRatio: (body.aspectRatio as string) || "16:9",
+      durationSec,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      paymentStatus: "pending_payment",
+      thumbUrl: "/assets/frames/thumb-16x9.svg",
+      videoUrl: null,
+    };
+
+    await db.collection("jobs").doc(jobId).set(jobData);
+
+    const rate = 0.05; // Default rate
+    const totalCents = Math.round(rate * durationSec * 100);
+
+    res.status(200).json({
+      ok: true,
+      ...jobData,
+      pricing: {
         currency: "USD",
-        itemization: {
-          base: {
-            unit: "USD/s",
-            rate: rate,
-            seconds: durationSec,
-            subtotal: total,
-          },
-          addons: [],
-          discounts: [],
-          taxes: [],
+        totalCents: totalCents,
+        subtotalBeforeDiscountCents: totalCents,
+        base: {
+          seconds: durationSec,
+          rate: rate,
+          unit: "USD/s",
+          amountCents: totalCents,
         },
-        total: total,
-        caps: {
-          maxDurationSec: engine.maxDurationSec || 60,
-          supportedFps: engine.fps || [24, 30],
+        addons: [],
+        margin: {
+          amountCents: 0,
         },
-        ttlSec: 120,
-      });
-    } catch (error) {
-      console.error("Error in preflight:", error);
-      res.status(500).json({ ok: false, error: { code: "INTERNAL_ERROR" } });
-    }
-  });
-});
+      },
+    });
+  })
+);
 
-export const generate = functions.https.onRequest((req, res) => {
-  return cors(req, res, async () => {
-    if (req.method !== "POST") {
-      res.status(405).json({ ok: false, error: { code: "METHOD_NOT_ALLOWED" } });
-      return;
-    }
-
-    try {
-      const body = req.body;
-      const userId = body.userId || "anonymous";
-      const engineId = body.engineId || body.engine;
-
-      const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-      const jobData = {
-        jobId,
-        userId,
-        engineId,
-        status: "pending",
-        prompt: body.prompt || "",
-        aspectRatio: body.aspectRatio || "16:9",
-        durationSec: body.durationSec || 5,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        paymentStatus: "pending_payment",
-        thumbUrl: "/assets/frames/thumb-16x9.svg",
-        videoUrl: null,
-      };
-
-      await db.collection("jobs").doc(jobId).set(jobData);
-
-      const rate = 0.05; // Default rate
-      const totalCents = Math.round(rate * (body.durationSec || 5) * 100);
-
-      res.status(200).json({
-        ok: true,
-        ...jobData,
-        pricing: {
-          currency: "USD",
-          totalCents: totalCents,
-          subtotalBeforeDiscountCents: totalCents,
-          base: {
-            seconds: body.durationSec || 5,
-            rate: rate,
-            unit: "USD/s",
-            amountCents: totalCents,
-          },
-          addons: [],
-          margin: {
-            amountCents: 0,
-          },
-        },
-      });
-    } catch (error) {
-      console.error("Error in generate:", error);
-      res.status(500).json({ ok: false, error: { code: "INTERNAL_ERROR" } });
-    }
-  });
-});
-
-export const jobs = functions.https.onRequest((req, res) => {
-  return cors(req, res, async () => {
+export const jobs = functions.https.onRequest(
+  withCors(async (req, res) => {
     if (req.method !== "GET") {
       res.status(405).json({ ok: false, error: { code: "METHOD_NOT_ALLOWED" } });
       return;
     }
 
-    try {
-      const limitCount = parseInt(req.query.limit as string) || 24;
-      const cursor = req.query.cursor as string;
+    // Verify authentication
+    const userId = await verifyAuthToken(req);
+    if (!userId) {
+      res.status(401).json({ ok: false, error: { code: "UNAUTHORIZED" } });
+      return;
+    }
 
-      let query: admin.firestore.Query = db.collection("jobs")
-        .orderBy("createdAt", "desc")
-        .limit(limitCount);
+    const limitCount = parseInt(req.query.limit as string) || 24;
+    const cursor = req.query.cursor as string | undefined;
 
-      if (cursor) {
-        const cursorDoc = await db.collection("jobs").doc(cursor).get();
-        if (cursorDoc.exists) {
-          query = query.startAfter(cursorDoc);
-        }
+    let query: admin.firestore.Query = db
+      .collection("jobs")
+      .where("userId", "==", userId)
+      .orderBy("createdAt", "desc")
+      .limit(limitCount);
+
+    if (cursor) {
+      const cursorDoc = await db.collection("jobs").doc(cursor).get();
+      if (cursorDoc.exists) {
+        query = query.startAfter(cursorDoc);
       }
+    }
 
-      const snapshot = await query.get();
-      const jobsList = snapshot.docs.map(doc => ({
+    const snapshot = await query.get();
+    const jobsList = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      // Convert Firestore Timestamp to ISO string
+      const createdAt = data.createdAt?.toDate?.()?.toISOString?.() ?? new Date().toISOString();
+      return {
+        ...data,
         id: doc.id,
-        ...doc.data()
-      }));
+        createdAt,
+      };
+    });
 
-      const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-      const nextCursor = lastDoc ? lastDoc.id : null;
+    const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+    const nextCursor = lastDoc ? lastDoc.id : null;
 
-      res.status(200).json({
-        ok: true,
-        jobs: jobsList,
-        nextCursor,
-      });
-    } catch (error) {
-      console.error("Error loading jobs:", error);
-      res.status(500).json({ ok: false, error: { code: "INTERNAL_ERROR" } });
+    res.status(200).json({
+      ok: true,
+      jobs: jobsList,
+      nextCursor,
+    });
+  })
+);
+
+export const seed = functions.https.onRequest(
+  withCors(async (req, res) => {
+    // Only allow in development/emulator
+    if (process.env.FUNCTIONS_EMULATOR !== "true") {
+      res.status(403).json({ ok: false, error: "Seed only available in emulator" });
+      return;
     }
-  });
-});
 
-export const seed = functions.https.onRequest((req, res) => {
-  return cors(req, res, async () => {
-    try {
-      const enginesData = require("../engines.json");
-      const jobsData = require("../jobs.json");
+    // Dynamic import for JSON files
+    const enginesData = await import("../engines.json");
+    const jobsData = await import("../jobs.json");
 
-      const batch = db.batch();
+    const batch = db.batch();
 
-      // Seed Engines
-      enginesData.engines.forEach((engine: any) => {
-        const docRef = db.collection("engines").doc(engine.id);
-        batch.set(docRef, {
-          ...engine,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
+    // Seed Engines
+    const engines = enginesData.engines as Array<{ id: string; [key: string]: unknown }>;
+    engines.forEach((engine) => {
+      const docRef = db.collection("engines").doc(engine.id);
+      batch.set(docRef, {
+        ...engine,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+    });
 
-      // Seed Jobs
-      jobsData.jobs.forEach((job: any) => {
-        const docRef = db.collection("jobs").doc(job.jobId);
-        batch.set(docRef, {
-          ...job,
-          createdAt: job.createdAt ? admin.firestore.Timestamp.fromDate(new Date(job.createdAt)) : admin.firestore.FieldValue.serverTimestamp()
-        });
+    // Seed Jobs
+    const jobsArray = jobsData.jobs as Array<{ jobId: string; createdAt?: string; [key: string]: unknown }>;
+    jobsArray.forEach((job) => {
+      const docRef = db.collection("jobs").doc(job.jobId);
+      batch.set(docRef, {
+        ...job,
+        createdAt: job.createdAt
+          ? admin.firestore.Timestamp.fromDate(new Date(job.createdAt))
+          : admin.firestore.FieldValue.serverTimestamp(),
       });
+    });
 
-      await batch.commit();
+    await batch.commit();
 
-      res.status(200).json({
-        ok: true,
-        message: `Seeded ${enginesData.engines.length} engines and ${jobsData.jobs.length} jobs.`
-      });
-    } catch (error) {
-      console.error("Error seeding:", error);
-      res.status(500).json({ ok: false, error: String(error) });
-    }
-  });
-});
+    res.status(200).json({
+      ok: true,
+      message: `Seeded ${engines.length} engines and ${jobsArray.length} jobs.`,
+    });
+  })
+);
 
-export const healthz = functions.https.onRequest((req, res) => {
-  return cors(req, res, async () => {
+export const healthz = functions.https.onRequest(
+  withCors(async (_req, res) => {
     res.status(200).json({ ok: true, timestamp: new Date().toISOString() });
-  });
-});
+  })
+);

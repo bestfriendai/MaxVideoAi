@@ -26,13 +26,7 @@ export async function POST(req: NextRequest) {
   const doc = await getLegalDocumentUncached('cookies');
   if (!doc) {
     if (process.env.NODE_ENV === 'development' || !process.env.DATABASE_URL) {
-      // Fallback for dev mode without DB
-      const fallbackDoc = { version: '1.0' };
-      // We continue with fallbackDoc
-      // But we need to define 'doc' variable to use below
-      // Since 'doc' is const in original scope (wait, no it's const in the block above in my replacement?)
-      // I need to restructure the code slightly or just use a new variable.
-      // Actually, I can just not return 500.
+      // Fallback for dev mode without DB.
     } else {
       return NextResponse.json({ ok: false, error: 'Cookie policy not configured' }, { status: 500 });
     }

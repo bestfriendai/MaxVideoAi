@@ -1,5 +1,5 @@
 import { getFirebaseFirestore, isFirebaseAdminConfigured } from '@/server/firebase-admin';
-import type { Firestore, DocumentData, QueryDocumentSnapshot } from 'firebase-admin/firestore';
+import type { Firestore } from 'firebase-admin/firestore';
 
 let db: Firestore | null = null;
 
@@ -12,6 +12,27 @@ export function getDb(): Firestore {
     db = getFirebaseFirestore();
   }
   return db;
+}
+
+// Helper to convert Firestore Timestamp to ISO string
+export function serializeTimestamp(value: unknown): string {
+  if (!value) return new Date().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') return value;
+  // Handle Firestore Timestamp objects
+  if (typeof value === 'object' && value !== null) {
+    // Check for toDate method (Firestore Timestamp)
+    if ('toDate' in value && typeof (value as { toDate: () => Date }).toDate === 'function') {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+    // Check for _seconds/_nanoseconds (raw Firestore Timestamp)
+    if ('_seconds' in value && typeof (value as { _seconds: number })._seconds === 'number') {
+      const seconds = (value as { _seconds: number })._seconds;
+      const nanoseconds = (value as { _nanoseconds?: number })._nanoseconds ?? 0;
+      return new Date(seconds * 1000 + nanoseconds / 1000000).toISOString();
+    }
+  }
+  return new Date().toISOString();
 }
 
 // Jobs Collection
@@ -31,8 +52,8 @@ export interface JobDocument {
   status: 'pending' | 'completed' | 'failed';
   progress: number;
   message: string | null;
-  createdAt: FirebaseFirestore.Timestamp | Date;
-  updatedAt?: FirebaseFirestore.Timestamp | Date;
+  createdAt: FirebaseFirestore.Timestamp | Date | string;
+  updatedAt?: FirebaseFirestore.Timestamp | Date | string;
   paymentStatus: string;
   finalPriceCents?: number;
   currency?: string;
@@ -67,7 +88,13 @@ export async function getJobById(jobId: string, userId?: string): Promise<JobDoc
       return null;
     }
 
-    return { ...data, jobId: doc.id };
+    // Serialize timestamps to ISO strings
+    return {
+      ...data,
+      jobId: doc.id,
+      createdAt: serializeTimestamp(data.createdAt),
+      updatedAt: data.updatedAt ? serializeTimestamp(data.updatedAt) : undefined,
+    };
   } catch (error) {
     console.error('[firestore] getJobById failed:', error);
     return null;
@@ -83,10 +110,15 @@ export async function getJobsByUserId(userId: string, limit = 24): Promise<JobDo
       .limit(limit)
       .get();
 
-    return snapshot.docs.map(doc => ({
-      ...doc.data() as JobDocument,
-      jobId: doc.id,
-    }));
+    return snapshot.docs.map(doc => {
+      const data = doc.data() as JobDocument;
+      return {
+        ...data,
+        jobId: doc.id,
+        createdAt: serializeTimestamp(data.createdAt),
+        updatedAt: data.updatedAt ? serializeTimestamp(data.updatedAt) : undefined,
+      };
+    });
   } catch (error) {
     console.error('[firestore] getJobsByUserId failed:', error);
     return [];
@@ -123,7 +155,7 @@ export interface ReceiptDocument {
   description: string;
   jobId?: string | null;
   pricingSnapshot?: Record<string, unknown>;
-  createdAt: FirebaseFirestore.Timestamp | Date;
+  createdAt: FirebaseFirestore.Timestamp | Date | string;
 }
 
 export async function getWalletBalance(userId: string): Promise<{ balance: number; currency: string }> {
@@ -284,9 +316,20 @@ export async function getMemberStatus(userId: string): Promise<{
     snapshot.docs.forEach(doc => {
       const receipt = doc.data() as ReceiptDocument;
       const amount = receipt.amountCents ?? 0;
-      const createdAt = receipt.createdAt instanceof Date
-        ? receipt.createdAt
-        : (receipt.createdAt as FirebaseFirestore.Timestamp).toDate();
+      // Parse createdAt from various formats
+      let createdAt: Date;
+      if (receipt.createdAt instanceof Date) {
+        createdAt = receipt.createdAt;
+      } else if (typeof receipt.createdAt === 'string') {
+        createdAt = new Date(receipt.createdAt);
+      } else if (receipt.createdAt && typeof receipt.createdAt === 'object' && 'toDate' in receipt.createdAt) {
+        createdAt = (receipt.createdAt as { toDate: () => Date }).toDate();
+      } else if (receipt.createdAt && typeof receipt.createdAt === 'object' && '_seconds' in receipt.createdAt) {
+        const ts = receipt.createdAt as { _seconds: number };
+        createdAt = new Date(ts._seconds * 1000);
+      } else {
+        createdAt = new Date();
+      }
 
       if (receipt.type === 'charge') {
         spent30 += amount;

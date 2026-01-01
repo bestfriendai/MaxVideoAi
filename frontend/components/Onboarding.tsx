@@ -3,9 +3,10 @@
 import React, { useState, useEffect, useCallback, memo, createContext, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import NextImage from 'next/image';
 import {
   Video,
-  Image,
+  Image as ImageIcon,
   Sparkles,
   Zap,
   ArrowRight,
@@ -54,7 +55,7 @@ const defaultSteps: OnboardingStep[] = [
     id: 'image',
     title: 'Create Images',
     description: 'Generate beautiful images with powerful AI models designed for creativity.',
-    icon: Image,
+    icon: ImageIcon,
     features: [
       'Text-to-image generation',
       'Style transfer and editing',
@@ -305,10 +306,12 @@ const OnboardingModal = memo(function OnboardingModal({
                     {/* Image */}
                     {step.image && (
                       <div className="overflow-hidden rounded-lg border border-gray-800">
-                        <img
+                        <NextImage
                           src={step.image}
                           alt={step.title}
-                          className="w-full"
+                          width={960}
+                          height={540}
+                          className="h-auto w-full"
                         />
                       </div>
                     )}

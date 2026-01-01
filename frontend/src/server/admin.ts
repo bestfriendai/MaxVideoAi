@@ -2,7 +2,6 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { getUserIdFromRequest } from '@/lib/user';
-import { getRouteAuthContext } from '@/lib/supabase-ssr';
 
 let adminCache: Map<string, boolean> | null = null;
 let cacheExpiry = 0;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -27,6 +28,14 @@ const iconSizes = {
   md: 'w-5 h-5',
   lg: 'w-6 h-6',
   xl: 'w-8 h-8',
+};
+
+const sizePixels = {
+  xs: 24,
+  sm: 32,
+  md: 40,
+  lg: 48,
+  xl: 64,
 };
 
 function getInitials(name: string): string {
@@ -115,9 +124,11 @@ export function Avatar({
   }
 
   return (
-    <img
+    <Image
       src={src}
       alt={alt || name || 'User avatar'}
+      width={sizePixels[size]}
+      height={sizePixels[size]}
       className={cn(
         'inline-block rounded-full object-cover',
         sizeClasses[size],

@@ -75,7 +75,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       // Initial state
       sidebarOpen: true,
       sidebarCollapsed: false,

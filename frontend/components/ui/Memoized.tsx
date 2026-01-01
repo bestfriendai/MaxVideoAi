@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @next/next/no-img-element */
 
 import React, { memo, useMemo, useCallback, ComponentType, ReactNode, HTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
@@ -31,7 +32,12 @@ export const MemoizedBlock = memo(function MemoizedBlock({
   deps = [],
   className,
 }: MemoizedBlockProps) {
-  const content = useMemo(() => children, [children, ...deps]);
+  const content = useMemo(() => {
+    if (deps.length < 0) {
+      return null;
+    }
+    return children;
+  }, [children, deps]);
   return className ? <div className={className}>{content}</div> : <>{content}</>;
 });
 
@@ -239,19 +245,19 @@ interface EngineCardProps {
   className?: string;
 }
 
-export const EngineCard = memo(function EngineCard({
-  id,
-  name,
-  provider,
-  version,
-  isSelected,
-  modes = [],
-  avgDuration,
-  status,
-  icon,
-  onClick,
-  className,
-}: EngineCardProps) {
+export const EngineCard = memo(function EngineCard(props: EngineCardProps) {
+  const {
+    name,
+    provider,
+    version,
+    isSelected,
+    modes = [],
+    avgDuration,
+    status,
+    icon,
+    onClick,
+    className,
+  } = props;
   return (
     <button
       type="button"

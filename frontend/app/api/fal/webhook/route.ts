@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { updateJobFromFalWebhook } from '@/server/fal-webhook-handler';
+import { timingSafeEqual } from 'crypto';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,8 +14,14 @@ export async function POST(req: Request) {
   const tokenParam = url.searchParams.get('token');
   const expectedToken = process.env.FAL_WEBHOOK_TOKEN?.trim();
 
-  if (expectedToken && tokenParam !== expectedToken) {
-    return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 });
+  if (expectedToken) {
+    const token = tokenParam || '';
+    const expectedBuffer = Buffer.from(expectedToken);
+    const tokenBuffer = Buffer.from(token);
+    
+    if (tokenBuffer.length !== expectedBuffer.length || !timingSafeEqual(tokenBuffer, expectedBuffer)) {
+      return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 });
+    }
   }
 
   const contentType = req.headers.get('content-type');

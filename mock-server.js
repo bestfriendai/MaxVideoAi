@@ -15,6 +15,8 @@ function readJsonFixture(filename) {
 
 const enginesFixture = readJsonFixture('engines.json');
 const preflightSample = readJsonFixture('preflight-veo3-8s-1080p.json');
+const jobsFixture = readJsonFixture('jobs.json');
+const jobsState = Array.isArray(jobsFixture.jobs) ? [...jobsFixture.jobs] : [];
 
 const enginesMap = enginesFixture.engines.reduce((acc, engine) => {
   acc[engine.id] = engine;
@@ -58,6 +60,31 @@ function collectSchemaFields(engine, mode) {
   ingest(schema.required, 'required');
   ingest(schema.optional, 'optional');
   return collected;
+}
+
+function normalizeDate(value) {
+  if (typeof value === 'string' && value.length) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
+function insertJobRecord(job) {
+  if (!job || typeof job.jobId !== 'string' || !job.jobId.length) return;
+  const existingIndex = jobsState.findIndex((entry) => entry.jobId === job.jobId);
+  if (existingIndex >= 0) {
+    jobsState[existingIndex] = { ...jobsState[existingIndex], ...job };
+  } else {
+    jobsState.unshift(job);
+  }
+  jobsState.sort((a, b) => {
+    const aTime = Number.isFinite(Date.parse(a.createdAt)) ? Date.parse(a.createdAt) : 0;
+    const bTime = Number.isFinite(Date.parse(b.createdAt)) ? Date.parse(b.createdAt) : 0;
+    return bTime - aTime;
+  });
 }
 
 function validateInputSchema(engine, payload, { mode, requireAssets }) {
@@ -197,26 +224,43 @@ function validateInputSchema(engine, payload, { mode, requireAssets }) {
 function buildPreflight(body) {
   const errors = [];
   const {
-    engine: engineId,
+    engine,
+    engineId,
+    engine_id,
     mode,
     durationSec,
     resolution,
     aspectRatio,
+    aspect_ratio,
     fps,
     addons = {},
     seedLocked = false,
     user = {}
   } = body || {};
 
-  const engine = enginesMap[engineId];
-  if (!engine) {
+  const resolvedEngineId =
+    typeof engine === 'string' && engine.length
+      ? engine
+      : typeof engineId === 'string' && engineId.length
+        ? engineId
+        : typeof engine_id === 'string' && engine_id.length
+          ? engine_id
+          : null;
+  const resolvedAspectRatio =
+    typeof aspectRatio === 'string' && aspectRatio.length
+      ? aspectRatio
+      : typeof aspect_ratio === 'string' && aspect_ratio.length
+        ? aspect_ratio
+        : null;
+  const engineDefinition = resolvedEngineId ? enginesMap[resolvedEngineId] : null;
+  if (!engineDefinition) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'UNKNOWN_ENGINE',
-          message: `Engine ${engineId} is not available.`,
+          message: `Engine ${resolvedEngineId} is not available.`,
           suggestions: Object.keys(enginesMap).map((id) => ({ engine: id }))
         }
       }
@@ -224,21 +268,21 @@ function buildPreflight(body) {
   }
 
   const requestedMode = typeof mode === 'string' ? mode : null;
-  if (!requestedMode || !engine.modes.includes(requestedMode)) {
+  if (!requestedMode || !engineDefinition.modes.includes(requestedMode)) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'UNSUPPORTED_MODE',
-          message: `Mode ${mode} not supported for engine ${engine.label}.`,
-          suggestions: engine.modes.map((supported) => ({ mode: supported }))
+          message: `Mode ${mode} not supported for engine ${engineDefinition.label}.`,
+          suggestions: engineDefinition.modes.map((supported) => ({ mode: supported }))
         }
       }
     };
   }
 
-  const schemaValidation = validateInputSchema(engine, body, { mode: requestedMode, requireAssets: false });
+  const schemaValidation = validateInputSchema(engineDefinition, body, { mode: requestedMode, requireAssets: false });
   if (!schemaValidation.valid) {
     return {
       status: 400,
@@ -256,7 +300,7 @@ function buildPreflight(body) {
 
   if (typeof durationSec !== 'number' || durationSec <= 0) {
     errors.push('Duration must be a positive number of seconds.');
-  } else if (engine.maxDurationSec && durationSec > engine.maxDurationSec) {
+  } else if (engineDefinition.maxDurationSec && durationSec > engineDefinition.maxDurationSec) {
     return {
       status: 400,
       payload: {
@@ -265,63 +309,63 @@ function buildPreflight(body) {
           code: 'UNSUPPORTED_COMBO',
           message: `Duration ${durationSec}s not supported at ${resolution} for this engine.`,
           suggestions: [
-            { durationSec: engine.maxDurationSec }
+            { durationSec: engineDefinition.maxDurationSec }
           ]
         }
       }
     };
   }
 
-  if (resolution && !engine.resolutions.includes(resolution)) {
+  if (resolution && !engineDefinition.resolutions.includes(resolution)) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'UNSUPPORTED_RESOLUTION',
-          message: `Resolution ${resolution} not supported for ${engine.label}.`,
-          suggestions: engine.resolutions.map((res) => ({ resolution: res }))
+          message: `Resolution ${resolution} not supported for ${engineDefinition.label}.`,
+          suggestions: engineDefinition.resolutions.map((res) => ({ resolution: res }))
         }
       }
     };
   }
 
-  if (aspectRatio && !engine.aspectRatios.includes(aspectRatio)) {
+  if (resolvedAspectRatio && !engineDefinition.aspectRatios.includes(resolvedAspectRatio)) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'UNSUPPORTED_ASPECT_RATIO',
-          message: `Aspect ratio ${aspectRatio} not supported for ${engine.label}.`,
-          suggestions: engine.aspectRatios.map((ar) => ({ aspectRatio: ar }))
+          message: `Aspect ratio ${resolvedAspectRatio} not supported for ${engineDefinition.label}.`,
+          suggestions: engineDefinition.aspectRatios.map((ar) => ({ aspectRatio: ar }))
         }
       }
     };
   }
 
-  if (fps && !engine.fps.includes(fps)) {
+  if (fps && !engineDefinition.fps.includes(fps)) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'UNSUPPORTED_FPS',
-          message: `FPS ${fps} not supported for ${engine.label}.`,
-          suggestions: engine.fps.map((value) => ({ fps: value }))
+          message: `FPS ${fps} not supported for ${engineDefinition.label}.`,
+          suggestions: engineDefinition.fps.map((value) => ({ fps: value }))
         }
       }
     };
   }
 
-  if (addons.audio && !engine.audio) {
+  if (addons.audio && !engineDefinition.audio) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'AUDIO_UNSUPPORTED',
-          message: `${engine.label} does not support audio generation.`,
+          message: `${engineDefinition.label} does not support audio generation.`,
           suggestions: enginesFixture.engines
             .filter((entry) => entry.audio)
             .map((entry) => ({ engine: entry.id }))
@@ -330,14 +374,14 @@ function buildPreflight(body) {
     };
   }
 
-  if (addons.upscale4k && !engine.upscale4k) {
+  if (addons.upscale4k && !engineDefinition.upscale4k) {
     return {
       status: 400,
       payload: {
         ok: false,
         error: {
           code: 'UPSCALE_UNSUPPORTED',
-          message: `${engine.label} does not support 4K upscaling.`,
+          message: `${engineDefinition.label} does not support 4K upscaling.`,
           suggestions: enginesFixture.engines
             .filter((entry) => entry.upscale4k)
             .map((entry) => ({ engine: entry.id }))
@@ -359,7 +403,7 @@ function buildPreflight(body) {
     };
   }
 
-  const pricing = engine.pricing || {};
+  const pricing = engineDefinition.pricing || {};
   let baseRate = 0;
   if (pricing.byResolution && resolution && pricing.byResolution[resolution]) {
     baseRate = pricing.byResolution[resolution];
@@ -369,14 +413,14 @@ function buildPreflight(body) {
     baseRate = 0.05; // conservative fallback for mocks
   }
 
-  const seconds = durationSec || engine.maxDurationSec || 1;
+  const seconds = durationSec || engineDefinition.maxDurationSec || 1;
   const baseSubtotal = roundCurrency(baseRate * seconds);
 
   const addonsItemization = [];
   let addonsTotal = 0;
 
   if (addons.audio) {
-    const audioSubtotal = engine.audio ? 0 : 0; // placeholder; audio engine includes cost
+    const audioSubtotal = engineDefinition.audio ? 0 : 0; // placeholder; audio engine includes cost
     addonsItemization.push({ type: 'audio', mode: addons.audio === true ? 'generate' : addons.audio, subtotal: audioSubtotal });
     addonsTotal += audioSubtotal;
   }
@@ -405,8 +449,8 @@ function buildPreflight(body) {
   const total = roundCurrency(subtotalBeforeDiscount - discountAmount);
 
   const messages = [];
-  if (engine.maxDurationSec && durationSec === engine.maxDurationSec && resolution === '1080p') {
-    messages.push(`${engine.label} caps duration at ${engine.maxDurationSec}s for ${resolution}.`);
+  if (engineDefinition.maxDurationSec && durationSec === engineDefinition.maxDurationSec && resolution === '1080p') {
+    messages.push(`${engineDefinition.label} caps duration at ${engineDefinition.maxDurationSec}s for ${resolution}.`);
   }
 
   const response = {
@@ -425,8 +469,8 @@ function buildPreflight(body) {
     },
     total,
     caps: {
-      maxDurationSec: engine.maxDurationSec,
-      supportedFps: engine.fps
+      maxDurationSec: engineDefinition.maxDurationSec,
+      supportedFps: engineDefinition.fps
     },
     messages,
     ttlSec: 120
@@ -453,11 +497,13 @@ function roundCurrency(value) {
 
 function matchesSampleRequest(body) {
   if (!body) return false;
-  return body.engine === 'veo3' &&
+  const engineId = body.engine ?? body.engineId ?? body.engine_id;
+  const aspectRatio = body.aspectRatio ?? body.aspect_ratio;
+  return engineId === 'veo3' &&
     body.mode === 't2v' &&
     body.durationSec === 8 &&
     body.resolution === '1080p' &&
-    body.aspectRatio === '16:9' &&
+    aspectRatio === '16:9' &&
     body.fps === 24 &&
     Boolean(body.addons && body.addons.upscale4k === false && body.addons.audio === true) &&
     body.seedLocked === false &&
@@ -465,8 +511,7 @@ function matchesSampleRequest(body) {
 }
 
 function paginateJobs(cursor, limit) {
-  const dataset = readJsonFixture('jobs.json');
-  const jobs = dataset.jobs || [];
+  const jobs = jobsState;
   if (!jobs.length) {
     return { ok: true, jobs: [], nextCursor: null };
   }
@@ -568,28 +613,36 @@ const server = http.createServer((req, res) => {
         return sendJson(res, 400, { ok: false, error: { code: 'INVALID_JSON', message: err.message } });
       }
 
-      const { engine: engineId } = body || {};
-      const engine = enginesMap[engineId];
-      if (!engine) {
+      const { engine, engineId, engine_id } = body || {};
+      const resolvedEngineId =
+        typeof engine === 'string' && engine.length
+          ? engine
+          : typeof engineId === 'string' && engineId.length
+            ? engineId
+            : typeof engine_id === 'string' && engine_id.length
+              ? engine_id
+              : null;
+      const engineDefinition = resolvedEngineId ? enginesMap[resolvedEngineId] : null;
+      if (!engineDefinition) {
         return sendJson(res, 400, {
           ok: false,
-          error: { code: 'UNKNOWN_ENGINE', message: `Engine ${engineId} is not available.` }
+          error: { code: 'UNKNOWN_ENGINE', message: `Engine ${resolvedEngineId} is not available.` }
         });
       }
 
       const requestedMode = typeof body.mode === 'string' ? body.mode : null;
-      if (!requestedMode || !engine.modes.includes(requestedMode)) {
+      if (!requestedMode || !engineDefinition.modes.includes(requestedMode)) {
         return sendJson(res, 400, {
           ok: false,
           error: {
             code: 'UNSUPPORTED_MODE',
-            message: `Mode ${body.mode} not supported for engine ${engine.label}.`,
-            suggestions: engine.modes.map((supported) => ({ mode: supported })),
+            message: `Mode ${body.mode} not supported for engine ${engineDefinition.label}.`,
+            suggestions: engineDefinition.modes.map((supported) => ({ mode: supported })),
           },
         });
       }
 
-      const validation = validateInputSchema(engine, body, { mode: requestedMode, requireAssets: true });
+      const validation = validateInputSchema(engineDefinition, body, { mode: requestedMode, requireAssets: true });
       if (!validation.valid) {
         return sendJson(res, 400, {
           ok: false,
@@ -634,11 +687,43 @@ const server = http.createServer((req, res) => {
       };
 
       const jobId = body.jobId || `job-${Date.now()}`;
+      insertJobRecord({
+        jobId,
+        engineId: resolvedEngineId ?? engineDefinition.id,
+        engineLabel: engineDefinition.label,
+        durationSec:
+          typeof body.durationSec === 'number'
+            ? body.durationSec
+            : typeof body.duration_seconds === 'number'
+              ? body.duration_seconds
+              : payload.itemization?.base?.seconds ?? engineDefinition.maxDurationSec ?? 0,
+        prompt: typeof body.prompt === 'string' ? body.prompt : '',
+        thumbUrl: '/assets/frames/thumb-16x9.svg',
+        createdAt: normalizeDate(body.createdAt),
+        aspectRatio:
+          typeof body.aspectRatio === 'string'
+            ? body.aspectRatio
+            : typeof body.aspect_ratio === 'string'
+              ? body.aspect_ratio
+              : Array.isArray(engineDefinition.aspectRatios) && engineDefinition.aspectRatios.length
+                ? engineDefinition.aspectRatios[0]
+                : '16:9',
+        hasAudio: Boolean(body.audio ?? body.generate_audio ?? body.generateAudio),
+        canUpscale: Boolean(engineDefinition.upscale4k),
+        previewFrame: '/assets/frames/thumb-16x9.svg',
+        status: 'pending',
+        progress: 5,
+        pricingSnapshot: pricing,
+        currency,
+        paymentStatus: 'pending_payment',
+      });
       return sendJson(res, 200, {
         ok: true,
         jobId,
         thumbUrl: '/assets/frames/thumb-16x9.svg',
         videoUrl: null,
+        status: 'pending',
+        progress: 5,
         pricing,
         paymentStatus: 'pending_payment',
       });

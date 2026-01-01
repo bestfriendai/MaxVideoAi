@@ -33,12 +33,12 @@ export function ServiceNoticeForm({ initialNotice }: ServiceNoticeFormProps) {
         });
         if (!response.ok) {
           const data = await response.json().catch(() => null);
-          throw new Error(data?.error ?? 'Impossible de sauvegarder la bannière.');
+          throw new Error(data?.error ?? 'Failed to save service notice.');
         }
         setStatus('success');
       } catch (err) {
         setStatus('error');
-        setError(err instanceof Error ? err.message : 'Impossible de sauvegarder la bannière.');
+        setError(err instanceof Error ? err.message : 'Failed to save service notice.');
       }
     });
   };
@@ -58,7 +58,7 @@ export function ServiceNoticeForm({ initialNotice }: ServiceNoticeFormProps) {
         setStatus('success');
       } catch (err) {
         setStatus('error');
-        setError(err instanceof Error ? err.message : 'Impossible de désactiver la bannière.');
+        setError(err instanceof Error ? err.message : 'Failed to disable service notice.');
       }
     });
   };

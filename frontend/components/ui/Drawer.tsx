@@ -222,7 +222,7 @@ export function BottomSheet({
   title,
   snapPoints = ['md'],
 }: BottomSheetProps) {
-  const [currentSnap, setCurrentSnap] = React.useState(snapPoints[0]);
+  const currentSnap = snapPoints[0];
 
   return (
     <Drawer

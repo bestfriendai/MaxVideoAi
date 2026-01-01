@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   signInWithEmailAndPassword,
@@ -8,9 +8,7 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   sendPasswordResetEmail,
-  onAuthStateChanged,
-  User,
-  AuthError
+  onAuthStateChanged
 } from 'firebase/auth';
 import { auth } from '@/lib/firebase-client';
 import { LOGIN_NEXT_STORAGE_KEY, LOGIN_LAST_TARGET_KEY, LOGIN_SKIP_ONBOARDING_KEY } from '@/lib/auth-storage';
@@ -104,7 +102,6 @@ export default function LoginPage() {
     return DEFAULT_NEXT_PATH;
   });
   const [nextPathReady, setNextPathReady] = useState(false);
-  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '')) as string;
   const persistNextTarget = useCallback((value: string) => {
     if (typeof window === 'undefined') return;
     const safe = sanitizeNextPath(value);
@@ -158,8 +155,6 @@ export default function LoginPage() {
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [browserLocale, setBrowserLocale] = useState<string | null>(null);
-  const [signupSuggestion, setSignupSuggestion] = useState<{ email: string; password: string } | null>(null);
-  const safeNextPath = useMemo(() => sanitizeNextPath(nextPath), [nextPath]);
 
   const syncInputState = useCallback(() => {
     const nextEmail = emailRef.current?.value ?? '';
@@ -267,12 +262,6 @@ export default function LoginPage() {
 
 
   useEffect(() => {
-    if (mode !== 'signin' && signupSuggestion) {
-      setSignupSuggestion(null);
-    }
-  }, [mode, signupSuggestion]);
-
-  useEffect(() => {
     if (!nextPathReady) return;
     let cancelled = false;
 
@@ -297,7 +286,6 @@ export default function LoginPage() {
     setStatusTone('info');
     setStatus('Signing in…');
     setError(null);
-    setSignupSuggestion(null);
 
     try {
       await signInWithEmailAndPassword(auth, email, password);
@@ -311,7 +299,6 @@ export default function LoginPage() {
 
       // Match Supabase behavior for invalid credentials suggestion
       if (authError.code === 'auth/wrong-password' || authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential') {
-        setSignupSuggestion({ email, password });
         setStatusTone('info');
         setStatus(
           "We couldn't sign you in with those details. If you're new, create your account without retyping anything."
@@ -323,17 +310,6 @@ export default function LoginPage() {
       }
     }
   }
-
-  const handleAcceptSignupSuggestion = useCallback(() => {
-    if (!signupSuggestion) return;
-    setMode('signup');
-    if (signupSuggestion.password) {
-      setConfirm((prev) => (prev ? prev : signupSuggestion.password));
-    }
-    setStatusTone('info');
-    setStatus("Great, let's create your account.");
-    setSignupSuggestion(null);
-  }, [signupSuggestion, setMode, setConfirm, setStatusTone, setStatus]);
 
   async function submitSignupConsents(userId: string) {
     try {

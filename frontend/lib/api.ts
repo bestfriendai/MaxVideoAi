@@ -130,6 +130,26 @@ type StatusRetryMeta = {
   timer: number | null;
 };
 
+function serializeTimestamp(value: unknown): string {
+  if (!value) return new Date().toISOString();
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return value.toISOString();
+  // Handle Firestore Timestamp objects
+  if (typeof value === 'object' && value !== null) {
+    // Check for toDate method (Firestore Timestamp)
+    if ('toDate' in value && typeof (value as { toDate: () => Date }).toDate === 'function') {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+    // Check for _seconds/_nanoseconds (raw Firestore Timestamp from JSON)
+    if ('_seconds' in value && typeof (value as { _seconds: number })._seconds === 'number') {
+      const seconds = (value as { _seconds: number })._seconds;
+      const nanoseconds = (value as { _nanoseconds?: number })._nanoseconds ?? 0;
+      return new Date(seconds * 1000 + nanoseconds / 1000000).toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
 function normalizeJobFromApi(job: Job): Job {
   const hasImageMedia =
     Array.isArray(job.renderIds) && job.renderIds.some((value) => typeof value === 'string' && value.length);
@@ -147,8 +167,12 @@ function normalizeJobFromApi(job: Job): Job {
           ? 'The service reported a failure without details. Try again. If it fails repeatedly, contact support with your request ID.'
           : undefined);
 
+  // Ensure createdAt is a string (serialize Firestore Timestamps)
+  const createdAt = serializeTimestamp(job.createdAt);
+
   return {
     ...job,
+    createdAt,
     status,
     progress,
     message,
@@ -238,14 +262,11 @@ async function fetchJobsPage(
 type JobsKey = readonly ['jobs', string, number, string | null, JobFeedType];
 
 export function useInfiniteJobs(pageSize = 12, options?: { type?: JobFeedType }) {
-  const [cacheKey, setCacheKey] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return 'server';
-    return readLastKnownUserId();
-  });
+  const [cacheKey, setCacheKey] = useState<string | null>(null);
   const feedType: JobFeedType =
     options?.type === 'image' || options?.type === 'video' ? options.type : 'all';
   const lastRevalidateRef = useRef<number>(0);
-  const lastKnownUserIdRef = useRef<string | null>(typeof window === 'undefined' ? null : readLastKnownUserId());
+  const lastKnownUserIdRef = useRef<string | null>(null);
   const [stableStore, setStableStore] = useState<{
     byId: Record<string, Job>;
     order: string[];
